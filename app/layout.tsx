@@ -52,7 +52,10 @@ export default function RootLayout({
               <nav className="ml-auto hidden items-center gap-1 xl:flex">
                 {navItems.map((item) => {
                   const Icon = item.icon;
-                  const enabled = item.href === "/profiles" || item.href === "/";
+                  const enabled =
+                    item.href === "/profiles" ||
+                    item.href === "/properties" ||
+                    item.href === "/";
 
                   return (
                     <Link

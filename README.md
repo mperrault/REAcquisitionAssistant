@@ -2,14 +2,16 @@
 
 Private real-estate acquisition decision support for ranking, comparing, and documenting residential acquisition opportunities.
 
-The first implemented slice is Milestone 0 and Milestone 1 from the project docs:
+Implemented slices:
 
 - Next.js App Router, TypeScript, Tailwind CSS, and shadcn-style UI primitives
 - Supabase-ready search profile schema with RLS
 - editable Search Profiles UI at `/profiles`
 - seeded Quiet Corner Second Home profile
-- local profile persistence for first-run development
-- unit tests for profile configuration persistence
+- Supabase-ready property and property-facts schema with RLS
+- editable Properties UI at `/properties`
+- local profile and property persistence for first-run development
+- unit tests for profile and property configuration persistence
 
 ## Getting Started
 
@@ -25,7 +27,10 @@ Run the development server:
 pnpm dev
 ```
 
-Open [http://localhost:3000/profiles](http://localhost:3000/profiles).
+Open:
+
+- [http://localhost:3000/profiles](http://localhost:3000/profiles)
+- [http://localhost:3000/properties](http://localhost:3000/properties)
 
 ## Environment
 
@@ -37,7 +42,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-The current profile editor persists to browser local storage so the Milestone 1 workflow is usable before Supabase auth is wired into the app.
+The current profile and property editors persist to browser local storage so the first MVP workflows are usable before Supabase auth is wired into the app.
 
 ## Verification
 
@@ -66,4 +71,4 @@ Read these before expanding the app:
 
 - The Quiet Corner profile is seed data, not scoring logic.
 - Supabase migrations define the target persistence model, while local storage backs the first editable UI slice.
-- Scoring is intentionally not implemented yet; the docs call for stabilizing profile configuration first.
+- Scoring is intentionally not implemented yet; property facts are being captured separately so they can later score differently under different profiles.
