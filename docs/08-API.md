@@ -15,6 +15,7 @@ The MVP can primarily use Next.js server actions or route handlers backed by Sup
 - create/update/list listing-alert sources
 - configure provider connection metadata without storing mailbox passwords
 - run enabled source ingestion
+- POST `/api/listing-alerts/poll-imap` to poll a configured IMAP source using a server-side password secret
 - persist alert message metadata and raw text
 - parse alert messages into listing candidates
 - deduplicate listing candidates by URL, MLS ID, and normalized address

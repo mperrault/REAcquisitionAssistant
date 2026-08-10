@@ -13,7 +13,8 @@ Implemented slices:
 - profile-driven scoring engine with hard rejections, category scores, labels, explanations, and missing-data warnings
 - local score evaluation history with Supabase-ready `score_evaluations` migration
 - local profile and property persistence for first-run development
-- unit tests for profile persistence, property persistence, and scoring behavior
+- automated listing-alert ingestion foundation with IMAP polling
+- unit tests for profile persistence, property persistence, scoring, and listing-alert ingestion behavior
 
 ## Getting Started
 
@@ -33,6 +34,7 @@ Open:
 
 - [http://localhost:3000/profiles](http://localhost:3000/profiles)
 - [http://localhost:3000/properties](http://localhost:3000/properties)
+- [http://localhost:3000/listing-alerts](http://localhost:3000/listing-alerts)
 
 ## Environment
 
@@ -42,9 +44,12 @@ Copy `.env.example` to `.env.local` and add Supabase credentials when a Supabase
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+REA_LISTING_ALERT_IMAP_PASSWORD=
 ```
 
 The current profile and property editors persist to browser local storage so the first MVP workflows are usable before Supabase auth is wired into the app.
+
+For IMAP listing-alert ingestion, configure a listing-alert source in the app and set the mailbox password only in `.env.local` under the secret name shown in the source. The default secret name is `REA_LISTING_ALERT_IMAP_PASSWORD`; the password is never stored in browser local storage.
 
 ## Verification
 

@@ -333,6 +333,25 @@ export function markListingCandidateImported(
   });
 }
 
+export function markListingAlertSourceChecked(
+  state: ListingAlertState,
+  sourceId: string,
+  timestamp = nowIso()
+): ListingAlertState {
+  return listingAlertStateSchema.parse({
+    ...state,
+    sources: state.sources.map((source) =>
+      source.id === sourceId
+        ? {
+            ...source,
+            lastCheckedAt: timestamp,
+            updatedAt: timestamp
+          }
+        : source
+    )
+  });
+}
+
 export function markListingCandidateIgnored(
   state: ListingAlertState,
   candidateId: string,

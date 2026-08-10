@@ -6,6 +6,7 @@ import {
   Inbox,
   Play,
   Plus,
+  RefreshCw,
   RotateCcw,
   Save,
   XCircle
@@ -27,6 +28,7 @@ import {
   createListingAlertSource,
   ingestListingAlertText,
   loadListingAlertState,
+  markListingAlertSourceChecked,
   markListingCandidateIgnored,
   markListingCandidateImported,
   saveListingAlertState,
@@ -42,6 +44,7 @@ import type {
   ListingCandidate,
   ListingCandidateStatus
 } from "@/lib/listing-alerts/types";
+import { listingAlertPollResponseSchema } from "@/lib/listing-alerts/polling-types";
 import {
   createEmptyPropertyState,
   loadPropertyState,
@@ -231,6 +234,7 @@ export function ListingAlertManager() {
     ListingCandidateStatus | "all"
   >("new");
   const [alertText, setAlertText] = React.useState(sampleAlertText);
+  const [isPolling, setIsPolling] = React.useState(false);
   const [loadSource, setLoadSource] = React.useState<"storage" | "empty" | "reset">(
     "empty"
   );
@@ -407,6 +411,80 @@ export function ListingAlertManager() {
     );
   }
 
+  async function handlePollSource() {
+    if (!selectedSource || selectedSource.provider !== "imap_mailbox") {
+      return;
+    }
+
+    setIsPolling(true);
+    setActionStatus("Polling mailbox");
+
+    try {
+      const response = await fetch("/api/listing-alerts/poll-imap", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          source: selectedSource,
+          since: selectedSource.lastCheckedAt,
+          maxMessages: 20
+        })
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : "Mailbox poll failed."
+        );
+      }
+
+      const pollResult = listingAlertPollResponseSchema.parse(payload);
+      let nextListingState = listingState;
+      let candidatesCreated = 0;
+      let candidatesUpdated = 0;
+
+      for (const message of pollResult.messages) {
+        const result = ingestListingAlertText(
+          nextListingState,
+          selectedSource.id,
+          {
+            externalMessageId: message.externalMessageId,
+            subject: message.subject,
+            from: message.from,
+            receivedAt: message.receivedAt,
+            bodyText: message.bodyText,
+            bodyHtml: message.bodyHtml
+          },
+          pollResult.checkedAt
+        );
+
+        nextListingState = result.state;
+        candidatesCreated += result.run.candidatesCreated;
+        candidatesUpdated += result.run.candidatesUpdated;
+      }
+
+      nextListingState = markListingAlertSourceChecked(
+        nextListingState,
+        selectedSource.id,
+        pollResult.checkedAt
+      );
+
+      persistListingState(
+        nextListingState,
+        `${pollResult.messages.length} messages, ${candidatesCreated} new, ${candidatesUpdated} updated`
+      );
+    } catch (error) {
+      setActionStatus(
+        error instanceof Error ? error.message : "Mailbox poll failed"
+      );
+    } finally {
+      setIsPolling(false);
+    }
+  }
+
   function handleImportCandidate(candidateId: string) {
     const candidate = listingState.candidates.find(
       (item) => item.id === candidateId
@@ -486,6 +564,22 @@ export function ListingAlertManager() {
           <Button type="button" variant="outline" onClick={handleNewSource}>
             <Plus aria-hidden="true" />
             Source
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handlePollSource}
+            disabled={
+              !selectedSource ||
+              selectedSource.provider !== "imap_mailbox" ||
+              isPolling
+            }
+          >
+            <RefreshCw
+              aria-hidden="true"
+              className={cn(isPolling && "animate-spin")}
+            />
+            Poll Now
           </Button>
           <Button type="button" onClick={handleSaveSource} disabled={!sourceDraft}>
             <Save aria-hidden="true" />
