@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+.pnpm-store/
+.pnp
+.pnp.js
+
+# next
+.next/
+out/
+
+# production
+build/
+dist/
+
+# local env
+.env
+.env*.local
+
+# testing
+coverage/
+
+# system/editor
+.DS_Store
+*.pem
+*.log
+*.tsbuildinfo
+.idea/
+.vscode/
