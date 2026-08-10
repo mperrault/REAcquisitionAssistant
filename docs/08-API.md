@@ -21,6 +21,7 @@ The MVP can primarily use Next.js server actions or route handlers backed by Sup
 - deduplicate listing candidates by URL, MLS ID, and normalized address
 - import a listing candidate as an editable property draft
 - ignore or archive a listing candidate
+- clear the local candidate queue without deleting alert source configuration
 
 ## Profile operations
 
@@ -91,3 +92,5 @@ Future options may include:
 The no-MLS MVP should ingest saved-search listing-alert emails from configured user-controlled sources. Parser test input may accept user-provided text, but the product workflow should not require manual copy/paste. If parsing is uncertain, preserve raw alert text, create inspectable candidates, and mark extracted facts as unverified.
 
 For IMAP sources, persist host, port, security mode, username, mailbox folder, and the server-side password secret name. Do not persist the password itself in the browser or database.
+
+The candidate queue is retained application state, not a live mailbox mirror. Deleting or moving email from the source mailbox should not automatically delete extracted candidates; queue clearing is an explicit local action.

@@ -9,6 +9,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Trash2,
   XCircle
 } from "lucide-react";
 
@@ -24,6 +25,7 @@ import {
   createPropertyDraftFromListingCandidate
 } from "@/lib/listing-alerts/listing-alert-parser";
 import {
+  clearListingAlertQueue,
   createEmptyListingAlertState,
   createListingAlertSource,
   ingestListingAlertText,
@@ -182,6 +184,58 @@ function getConnectorStatus(source: ListingAlertSource | null) {
   return source.connectorConfig.gmailAccountHint
     ? { label: "Account set", variant: "success" as const }
     : { label: "OAuth pending", variant: "warning" as const };
+}
+
+function getRuntimeStatus(source: ListingAlertSource | null) {
+  if (!source) {
+    return { label: "No source", variant: "outline" as const };
+  }
+
+  if (source.provider === "imap_mailbox") {
+    return { label: "Manual poll ready", variant: "success" as const };
+  }
+
+  if (source.provider === "manual_test") {
+    return { label: "Parser only", variant: "secondary" as const };
+  }
+
+  return { label: "OAuth pending", variant: "warning" as const };
+}
+
+function getProviderLabel(provider: ListingAlertSourceProvider) {
+  return (
+    providerOptions.find((option) => option.value === provider)?.label ?? provider
+  );
+}
+
+function getCandidateProvenance(
+  candidate: ListingCandidate,
+  state: ListingAlertState
+) {
+  const source = state.sources.find((item) => item.id === candidate.sourceId);
+  const message = state.messages.find(
+    (item) =>
+      item.id === candidate.messageId ||
+      item.externalMessageId === candidate.externalMessageId
+  );
+  const isParserTest =
+    candidate.externalMessageId.startsWith("test-message-") ||
+    message?.subject === "Parser test listing alert";
+  const label = isParserTest
+    ? "Parser Test"
+    : source?.provider === "imap_mailbox"
+      ? "IMAP Poll"
+      : source
+        ? getProviderLabel(source.provider)
+        : "Unknown Source";
+
+  return {
+    label,
+    sourceName: source?.name ?? "Unknown source",
+    messageSubject: message?.subject ?? "",
+    from: message?.from ?? "",
+    receivedAt: message?.receivedAt ?? candidate.createdAt
+  };
 }
 
 function createDefaultSource() {
@@ -384,6 +438,13 @@ export function ListingAlertManager() {
     setSourceDraft(cloneSource(source));
     setLoadSource("storage");
     setActionStatus("Alerts reset");
+  }
+
+  function handleClearQueue() {
+    persistListingState(
+      clearListingAlertQueue(listingState),
+      "Queue cleared; sources preserved"
+    );
   }
 
   function handleProcessAlertText() {
@@ -789,7 +850,9 @@ export function ListingAlertManager() {
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-muted-foreground">Runtime</span>
-              <Badge variant="warning">Poller pending</Badge>
+              <Badge variant={getRuntimeStatus(selectedSource).variant}>
+                {getRuntimeStatus(selectedSource).label}
+              </Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-muted-foreground">Last checked</span>
@@ -826,6 +889,20 @@ export function ListingAlertManager() {
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleClearQueue}
+                  disabled={
+                    listingState.candidates.length === 0 &&
+                    listingState.messages.length === 0 &&
+                    listingState.runs.length === 0
+                  }
+                >
+                  <Trash2 aria-hidden="true" />
+                  Clear Queue
+                </Button>
                 <Select
                   className="w-44"
                   value={candidateStatusFilter}
@@ -851,91 +928,113 @@ export function ListingAlertManager() {
                 No candidates match the current source and status filter.
               </div>
             ) : (
-              filteredCandidates.map((candidate) => (
-                <article key={candidate.id} className="p-4 sm:p-5">
-                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-base font-semibold">
-                          {formatAddress(candidate)}
-                        </h3>
-                        <Badge variant={getCandidateStatusVariant(candidate.status)}>
-                          {candidate.status}
-                        </Badge>
-                        <Badge variant="outline">
-                          {Math.round(candidate.confidence * 100)}% parsed
-                        </Badge>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                        <span>{formatCurrency(candidate.askingPrice)}</span>
-                        <span>
-                          {candidate.bedrooms ?? "-"} bd /{" "}
-                          {candidate.bathrooms ?? "-"} ba
-                        </span>
-                        <span>
-                          {candidate.livingSqft
-                            ? `${candidate.livingSqft.toLocaleString()} sqft`
-                            : "Sqft unknown"}
-                        </span>
-                        <span>
-                          {candidate.lotAcres
-                            ? `${candidate.lotAcres} acres`
-                            : "Acreage unknown"}
-                        </span>
-                      </div>
-                      <p className="mt-3 line-clamp-3 max-w-5xl text-sm text-muted-foreground">
-                        {candidate.listingRemarks || candidate.rawText}
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {candidate.facts.slice(0, 6).map((fact) => (
-                          <Badge key={fact.id} variant="outline">
-                            {fact.label}
-                          </Badge>
-                        ))}
-                        {candidate.warnings.map((warning) => (
-                          <Badge key={warning} variant="warning">
-                            {warning}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
+              filteredCandidates.map((candidate) => {
+                const provenance = getCandidateProvenance(candidate, listingState);
 
-                    <div className="flex shrink-0 flex-wrap items-center gap-2">
-                      {candidate.listingUrl ? (
-                        <Button type="button" variant="outline" size="sm" asChild>
-                          <a
-                            href={candidate.listingUrl}
-                            target="_blank"
-                            rel="noreferrer"
+                return (
+                  <article key={candidate.id} className="p-4 sm:p-5">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-base font-semibold">
+                            {formatAddress(candidate)}
+                          </h3>
+                          <Badge
+                            variant={getCandidateStatusVariant(candidate.status)}
                           >
-                            <Inbox aria-hidden="true" />
-                            Open
-                          </a>
+                            {candidate.status}
+                          </Badge>
+                          <Badge variant="outline">
+                            {Math.round(candidate.confidence * 100)}% parsed
+                          </Badge>
+                          <Badge variant="outline">{provenance.label}</Badge>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                          <span>{provenance.sourceName}</span>
+                          <span>{formatDateTime(provenance.receivedAt)}</span>
+                          {provenance.from ? <span>{provenance.from}</span> : null}
+                          {provenance.messageSubject ? (
+                            <span className="block max-w-[28rem] truncate">
+                              {provenance.messageSubject}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                          <span>{formatCurrency(candidate.askingPrice)}</span>
+                          <span>
+                            {candidate.bedrooms ?? "-"} bd /{" "}
+                            {candidate.bathrooms ?? "-"} ba
+                          </span>
+                          <span>
+                            {candidate.livingSqft
+                              ? `${candidate.livingSqft.toLocaleString()} sqft`
+                              : "Sqft unknown"}
+                          </span>
+                          <span>
+                            {candidate.lotAcres
+                              ? `${candidate.lotAcres} acres`
+                              : "Acreage unknown"}
+                          </span>
+                        </div>
+                        <p className="mt-3 line-clamp-3 max-w-5xl text-sm text-muted-foreground">
+                          {candidate.listingRemarks || candidate.rawText}
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {candidate.facts.slice(0, 6).map((fact) => (
+                            <Badge key={fact.id} variant="outline">
+                              {fact.label}
+                            </Badge>
+                          ))}
+                          {candidate.warnings.map((warning) => (
+                            <Badge key={warning} variant="warning">
+                              {warning}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        {candidate.listingUrl ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            asChild
+                          >
+                            <a
+                              href={candidate.listingUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <Inbox aria-hidden="true" />
+                              Open
+                            </a>
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => handleImportCandidate(candidate.id)}
+                          disabled={candidate.status === "imported"}
+                        >
+                          <CheckCircle2 aria-hidden="true" />
+                          Import
                         </Button>
-                      ) : null}
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => handleImportCandidate(candidate.id)}
-                        disabled={candidate.status === "imported"}
-                      >
-                        <CheckCircle2 aria-hidden="true" />
-                        Import
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleIgnoreCandidate(candidate.id)}
-                        disabled={candidate.status === "imported"}
-                      >
-                        <XCircle aria-hidden="true" />
-                        Ignore
-                      </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleIgnoreCandidate(candidate.id)}
+                          disabled={candidate.status === "imported"}
+                        >
+                          <XCircle aria-hidden="true" />
+                          Ignore
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                </article>
-              ))
+                  </article>
+                );
+              })
             )}
           </div>
         </section>

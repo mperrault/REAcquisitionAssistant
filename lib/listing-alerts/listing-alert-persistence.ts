@@ -352,6 +352,17 @@ export function markListingAlertSourceChecked(
   });
 }
 
+export function clearListingAlertQueue(
+  state: ListingAlertState
+): ListingAlertState {
+  return listingAlertStateSchema.parse({
+    ...state,
+    messages: [],
+    candidates: [],
+    runs: []
+  });
+}
+
 export function markListingCandidateIgnored(
   state: ListingAlertState,
   candidateId: string,

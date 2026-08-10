@@ -5,6 +5,7 @@ import {
   parseListingAlertText
 } from "@/lib/listing-alerts/listing-alert-parser";
 import {
+  clearListingAlertQueue,
   createEmptyListingAlertState,
   createListingAlertSource,
   ingestListingAlertText,
@@ -145,6 +146,54 @@ describe("listing alert ingestion", () => {
     expect(secondRun.run.candidatesUpdated).toBe(2);
     expect(secondRun.state.candidates).toHaveLength(2);
     expect(secondRun.state.messages).toHaveLength(2);
+  });
+
+  it("clears the queue without removing source configuration", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-clear",
+        name: "MilestoneSW Listing Alerts",
+        provider: "imap_mailbox",
+        connectorConfig: {
+          gmailAccountHint: "",
+          imapHost: "mail.example.com",
+          imapPort: 993,
+          imapSecurity: "ssl_tls",
+          imapUsername: "alerts@example.com",
+          imapMailbox: "INBOX",
+          credentialEnvVar: "REA_LISTING_ALERT_IMAP_PASSWORD"
+        }
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const ingested = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-clear",
+        subject: "Alert",
+        from: "alerts@example.com",
+        receivedAt: timestamp,
+        bodyText: alertText
+      },
+      timestamp,
+      deterministicIds("clear")
+    );
+    const cleared = clearListingAlertQueue(ingested.state);
+
+    expect(cleared.sources).toHaveLength(1);
+    expect(cleared.sources[0]?.connectorConfig.imapHost).toBe(
+      "mail.example.com"
+    );
+    expect(cleared.candidates).toHaveLength(0);
+    expect(cleared.messages).toHaveLength(0);
+    expect(cleared.runs).toHaveLength(0);
   });
 
   it("stores IMAP connector settings without storing a password", () => {
