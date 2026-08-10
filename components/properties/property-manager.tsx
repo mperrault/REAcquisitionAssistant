@@ -3,6 +3,7 @@
 import * as React from "react";
 import {
   BadgeDollarSign,
+  BarChart3,
   FileText,
   Home,
   LinkIcon,
@@ -14,6 +15,7 @@ import {
   Wrench
 } from "lucide-react";
 
+import { ScoreEvaluationPanel } from "@/components/scoring/score-evaluation-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,9 +45,26 @@ import {
   listingStatusOptions,
   propertyFactSourceOptions
 } from "@/lib/properties/types";
+import { loadProfileState } from "@/lib/profiles/profile-persistence";
+import type { ProfileState } from "@/lib/profiles/types";
+import { evaluateProperty } from "@/lib/scoring/evaluate-property";
+import {
+  addScoreEvaluation,
+  createEmptyScoreState,
+  getLatestScoreEvaluation,
+  loadScoreState,
+  saveScoreState
+} from "@/lib/scoring/score-persistence";
+import type { ScoreEvaluation, ScoreEvaluationState } from "@/lib/scoring/types";
 import { cn } from "@/lib/utils";
 
-type TabId = "overview" | "facts" | "financials" | "systems" | "notes";
+type TabId =
+  | "overview"
+  | "facts"
+  | "financials"
+  | "systems"
+  | "notes"
+  | "scoring";
 
 const tabs: Array<{
   id: TabId;
@@ -56,7 +75,8 @@ const tabs: Array<{
   { id: "facts", label: "Facts", icon: Search },
   { id: "financials", label: "Financials", icon: BadgeDollarSign },
   { id: "systems", label: "Systems", icon: Wrench },
-  { id: "notes", label: "Notes", icon: FileText }
+  { id: "notes", label: "Notes", icon: FileText },
+  { id: "scoring", label: "Scoring", icon: BarChart3 }
 ];
 
 function parseNullableInteger(value: string) {
@@ -132,12 +152,19 @@ function getLifecycleLabel(status: LifecycleStatus) {
 }
 
 function getListingLabel(status: ListingStatus) {
-  return listingStatusOptions.find((option) => option.value === status)?.label ?? status;
+  return (
+    listingStatusOptions.find((option) => option.value === status)?.label ??
+    status
+  );
 }
 
 export function PropertyManager() {
   const [propertyState, setPropertyState] = React.useState<PropertyState>(() =>
     createEmptyPropertyState()
+  );
+  const [profileState, setProfileState] = React.useState<ProfileState | null>(null);
+  const [scoreState, setScoreState] = React.useState<ScoreEvaluationState>(() =>
+    createEmptyScoreState()
   );
   const [selectedPropertyId, setSelectedPropertyId] = React.useState<string | null>(
     null
@@ -155,7 +182,11 @@ export function PropertyManager() {
 
   React.useEffect(() => {
     const result = loadPropertyState(window.localStorage);
+    const profileResult = loadProfileState(window.localStorage);
+    const scoreResult = loadScoreState(window.localStorage);
     setPropertyState(result.state);
+    setProfileState(profileResult.state);
+    setScoreState(scoreResult.state);
     setLoadSource(result.source);
 
     const firstProperty = result.state.properties[0] ?? null;
@@ -170,6 +201,24 @@ export function PropertyManager() {
       ) ?? null,
     [propertyState.properties, selectedPropertyId]
   );
+  const activeProfile = React.useMemo(() => {
+    if (!profileState) {
+      return null;
+    }
+
+    return (
+      profileState.profiles.find(
+        (profile) => profile.id === profileState.activeProfileId
+      ) ?? null
+    );
+  }, [profileState]);
+  const latestEvaluation = React.useMemo(() => {
+    if (!draft || !activeProfile) {
+      return undefined;
+    }
+
+    return getLatestScoreEvaluation(scoreState, draft.id, activeProfile.id);
+  }, [activeProfile, draft, scoreState]);
 
   const isDirty =
     propertyFingerprint(draft) !== propertyFingerprint(selectedProperty);
@@ -267,6 +316,22 @@ export function PropertyManager() {
     }
 
     persistState(upsertProperty(propertyState, draft), draft.id);
+  }
+
+  function handleEvaluate() {
+    if (!draft || !activeProfile) {
+      return;
+    }
+
+    const savedPropertyState = upsertProperty(propertyState, draft);
+    const evaluation = evaluateProperty(draft, activeProfile);
+    const nextScoreState = addScoreEvaluation(scoreState, evaluation);
+    const persistedScores = saveScoreState(window.localStorage, nextScoreState);
+
+    setScoreState(persistedScores);
+    persistState(savedPropertyState, draft.id);
+    setSaveStatus("Scored");
+    setActiveTab("scoring");
   }
 
   function handleDelete() {
@@ -407,9 +472,18 @@ export function PropertyManager() {
                         {formatCurrency(property.askingPrice)}
                       </div>
                     </div>
-                    <Badge variant="outline">
-                      {getLifecycleLabel(property.lifecycleStatus)}
-                    </Badge>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <Badge variant="outline">
+                        {getLifecycleLabel(property.lifecycleStatus)}
+                      </Badge>
+                      {activeProfile ? (
+                        <PropertyScoreBadge
+                          scoreState={scoreState}
+                          propertyId={property.id}
+                          profileId={activeProfile.id}
+                        />
+                      ) : null}
+                    </div>
                   </div>
                 </button>
               ))}
@@ -434,19 +508,39 @@ export function PropertyManager() {
                         Listing: {getListingLabel(draft.listingStatus)}
                       </Badge>
                       <Badge variant="outline">{draft.facts.length} facts</Badge>
+                      {latestEvaluation ? (
+                        <Badge
+                          variant={
+                            latestEvaluation.hardRejected ? "destructive" : "success"
+                          }
+                        >
+                          Score {latestEvaluation.normalizedScore}
+                        </Badge>
+                      ) : null}
                     </>
                   ) : null}
                 </div>
               </div>
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={handleDelete}
-                disabled={!draft}
-              >
-                <Trash2 aria-hidden="true" />
-                Delete
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleEvaluate}
+                  disabled={!draft || !activeProfile}
+                >
+                  <BarChart3 aria-hidden="true" />
+                  Evaluate
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={handleDelete}
+                  disabled={!draft}
+                >
+                  <Trash2 aria-hidden="true" />
+                  Delete
+                </Button>
+              </div>
             </div>
 
             <div className="mt-5 flex flex-wrap gap-2">
@@ -497,12 +591,42 @@ export function PropertyManager() {
                 {activeTab === "notes" ? (
                   <NotesTab draft={draft} updateDraft={updateDraft} />
                 ) : null}
+                {activeTab === "scoring" ? (
+                  <ScoringTab
+                    activeProfileName={activeProfile?.name ?? null}
+                    evaluation={latestEvaluation}
+                    onEvaluate={handleEvaluate}
+                    canEvaluate={Boolean(activeProfile)}
+                  />
+                ) : null}
               </>
             )}
           </div>
         </section>
       </div>
     </div>
+  );
+}
+
+function PropertyScoreBadge({
+  scoreState,
+  propertyId,
+  profileId
+}: {
+  scoreState: ScoreEvaluationState;
+  propertyId: string;
+  profileId: string;
+}) {
+  const evaluation = getLatestScoreEvaluation(scoreState, propertyId, profileId);
+
+  if (!evaluation) {
+    return null;
+  }
+
+  return (
+    <Badge variant={evaluation.hardRejected ? "destructive" : "secondary"}>
+      {evaluation.normalizedScore}
+    </Badge>
   );
 }
 
@@ -965,6 +1089,51 @@ function NotesTab({
           value={draft.notes}
           onChange={(event) => updateDraft({ notes: event.target.value })}
         />
+      </Section>
+    </div>
+  );
+}
+
+function ScoringTab({
+  activeProfileName,
+  evaluation,
+  onEvaluate,
+  canEvaluate
+}: {
+  activeProfileName: string | null;
+  evaluation: ScoreEvaluation | undefined;
+  onEvaluate: () => void;
+  canEvaluate: boolean;
+}) {
+  return (
+    <div className="grid gap-5">
+      <Section
+        title="Score Evaluation"
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onEvaluate}
+            disabled={!canEvaluate}
+          >
+            <BarChart3 aria-hidden="true" />
+            Evaluate
+          </Button>
+        }
+      >
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Badge variant="outline">
+            {activeProfileName ?? "No active profile"}
+          </Badge>
+        </div>
+        {evaluation ? (
+          <ScoreEvaluationPanel evaluation={evaluation} />
+        ) : (
+          <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+            No score evaluation has been saved for this property and active profile.
+          </div>
+        )}
       </Section>
     </div>
   );

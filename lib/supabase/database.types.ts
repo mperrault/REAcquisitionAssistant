@@ -312,6 +312,49 @@ export type Database = {
           Database["public"]["Tables"]["property_facts"]["Insert"]
         >;
       };
+      score_evaluations: {
+        Row: {
+          id: string;
+          property_id: string;
+          profile_id: string;
+          profile_version: number;
+          scoring_engine_version: string;
+          raw_score: number;
+          normalized_score: number;
+          score_label: string;
+          hard_rejected: boolean;
+          explanation_json: Json;
+          hard_reject_reasons: Json;
+          positive_factors: Json;
+          penalties: Json;
+          missing_data: Json;
+          category_scores: Json;
+          evaluated_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          property_id: string;
+          profile_id: string;
+          profile_version: number;
+          scoring_engine_version: string;
+          raw_score: number;
+          normalized_score: number;
+          score_label: string;
+          hard_rejected?: boolean;
+          explanation_json: Json;
+          hard_reject_reasons?: Json;
+          positive_factors?: Json;
+          penalties?: Json;
+          missing_data?: Json;
+          category_scores?: Json;
+          evaluated_at?: string;
+          created_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["score_evaluations"]["Insert"]
+        >;
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;

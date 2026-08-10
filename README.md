@@ -10,8 +10,10 @@ Implemented slices:
 - seeded Quiet Corner Second Home profile
 - Supabase-ready property and property-facts schema with RLS
 - editable Properties UI at `/properties`
+- profile-driven scoring engine with hard rejections, category scores, labels, explanations, and missing-data warnings
+- local score evaluation history with Supabase-ready `score_evaluations` migration
 - local profile and property persistence for first-run development
-- unit tests for profile and property configuration persistence
+- unit tests for profile persistence, property persistence, and scoring behavior
 
 ## Getting Started
 
@@ -71,4 +73,4 @@ Read these before expanding the app:
 
 - The Quiet Corner profile is seed data, not scoring logic.
 - Supabase migrations define the target persistence model, while local storage backs the first editable UI slice.
-- Scoring is intentionally not implemented yet; property facts are being captured separately so they can later score differently under different profiles.
+- Scoring uses the active profile and stores each run as a separate evaluation so profile-version history can be preserved.
