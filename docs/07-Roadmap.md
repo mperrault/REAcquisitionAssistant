@@ -41,6 +41,8 @@ Deliver:
 
 - property list
 - create/edit property
+- automated listing-alert ingestion foundation
+- listing-alert parser test harness
 - incomplete records allowed
 - lifecycle status
 - listing URL
@@ -142,6 +144,9 @@ Potential:
 Only after core workflow proves useful.
 
 Potential:
+- production Gmail/IMAP listing-alert polling
+- authorized listing/feed ingestion if credentials become available
+- browser-assisted user import as fallback
 - geocoding
 - drive-time API
 - parcel GIS

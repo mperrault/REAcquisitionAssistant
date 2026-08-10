@@ -10,6 +10,16 @@ The MVP can primarily use Next.js server actions or route handlers backed by Sup
 - fetch property detail
 - archive/delete property
 
+## Listing-alert ingestion operations
+
+- create/update/list listing-alert sources
+- run enabled source ingestion
+- persist alert message metadata and raw text
+- parse alert messages into listing candidates
+- deduplicate listing candidates by URL, MLS ID, and normalized address
+- import a listing candidate as an editable property draft
+- ignore or archive a listing candidate
+
 ## Profile operations
 
 - create profile
@@ -73,5 +83,7 @@ Future options may include:
 
 - MLS feed if licensed
 - real-estate data provider APIs
-- browser-assisted user import
 - email/listing alert ingestion
+- browser-assisted user import
+
+The no-MLS MVP should ingest saved-search listing-alert emails from configured user-controlled sources. Parser test input may accept user-provided text, but the product workflow should not require manual copy/paste. If parsing is uncertain, preserve raw alert text, create inspectable candidates, and mark extracted facts as unverified.

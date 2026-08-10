@@ -16,6 +16,9 @@ The system must support:
 - scoring categories and weights
 - hard deal breakers
 - properties
+- listing-alert ingestion sources
+- listing-alert ingestion runs
+- listing-alert candidate records
 - property facts/features
 - financial assumptions
 - renovation estimates
@@ -54,7 +57,9 @@ The user can create a profile and configure:
 
 All settings must be editable without code changes.
 
-### 3.2 Add a property
+### 3.2 Add or ingest properties
+
+The MVP must support manual property creation, but the primary time-saving workflow is automated listing-alert ingestion. The user should not need to retype listings found through saved searches.
 
 The user can manually create a property record with:
 
@@ -84,6 +89,44 @@ The user can manually create a property record with:
 - photos or attachments
 
 The system must allow incomplete records.
+
+The user must be able to configure one or more permitted listing-alert sources. Because the MVP does not assume MLS/IDX credentials, the first automated source is saved-search email alerts sent to a mailbox or label controlled by the user.
+
+Supported MVP ingestion source types:
+
+- Gmail label or query containing listing-alert emails
+- IMAP mailbox containing listing-alert emails
+- manual parser test input for development and fallback only
+
+An ingestion run should:
+
+- fetch new alert messages from enabled sources
+- preserve message subject, sender, received timestamp, and raw body text
+- extract one or more listing candidates from each message
+- deduplicate candidates by listing URL, MLS ID when available, and normalized address
+- create editable property drafts from candidates on import
+- mark extracted facts as sourced from `listing` and unverified
+
+The parser should extract likely fields when present:
+
+- address or location
+- listing URL
+- asking price
+- town/state
+- bedrooms/bathrooms
+- living area
+- lot size
+- year built
+- taxes/HOA if present
+- house style if present
+- listing remarks
+- setting/risk feature hints
+
+Ingested records must remain editable before and after saving. Any extracted or inferred facts must be marked with source/provenance and should not be treated as verified unless the user verifies them.
+
+Ingestion failure should not block the queue. The app should preserve the raw alert text, show warnings, and allow the user to inspect or ignore the candidate.
+
+The app must not perform unauthorized scraping of listing sites. Automatic ingestion must use email alerts supplied by the user, licensed feeds, authorized APIs, or other permitted data sources.
 
 ### 3.3 Score a property
 

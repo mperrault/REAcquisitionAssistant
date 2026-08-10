@@ -91,6 +91,7 @@ Suggested application services:
 
 - `profile-service`
 - `property-service`
+- `listing-alert-ingestion-service`
 - `scoring-service`
 - `renovation-service`
 - `comparison-service`
@@ -101,6 +102,18 @@ Suggested application services:
 ### 5. No scraping dependency
 
 Listing URLs may be stored. The app should not require unauthorized scraping to function.
+
+Property intake should be designed as a permitted-ingestion pipeline with listing-alert email ingestion as the no-MLS MVP path:
+
+- configured Gmail label/query or IMAP mailbox
+- ingestion runs that fetch only new alert messages
+- raw message preservation for audit/debugging
+- listing-candidate extraction and deduplication
+- candidate-to-property draft creation
+- manual parser test input for development and fallback only
+- licensed feed or provider API later
+
+Every imported fact should preserve source/provenance and verification state.
 
 ## Suggested project structure
 
@@ -195,5 +208,7 @@ MVP should support CSV export of property records and profile settings.
 
 Later:
 - CSV import
+- listing-alert email ingestion connectors
+- user-assisted listing text import as fallback
 - JSON backup/restore
 - document attachments

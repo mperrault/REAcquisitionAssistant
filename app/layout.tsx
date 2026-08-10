@@ -4,6 +4,7 @@ import {
   BarChart3,
   FileText,
   Home,
+  Inbox,
   LayoutDashboard,
   Map,
   Scale,
@@ -16,6 +17,7 @@ import "./globals.css";
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/properties", label: "Properties", icon: Home },
+  { href: "/listing-alerts", label: "Listing Alerts", icon: Inbox },
   { href: "/compare", label: "Compare", icon: Scale },
   { href: "/map", label: "Map", icon: Map },
   { href: "/profiles", label: "Search Profiles", icon: Search },
@@ -55,6 +57,7 @@ export default function RootLayout({
                   const enabled =
                     item.href === "/profiles" ||
                     item.href === "/properties" ||
+                    item.href === "/listing-alerts" ||
                     item.href === "/";
 
                   return (

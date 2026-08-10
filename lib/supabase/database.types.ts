@@ -355,6 +355,166 @@ export type Database = {
           Database["public"]["Tables"]["score_evaluations"]["Insert"]
         >;
       };
+      listing_alert_sources: {
+        Row: {
+          id: string;
+          user_id: string;
+          provider:
+            | "gmail_label"
+            | "gmail_query"
+            | "imap_mailbox"
+            | "manual_test";
+          name: string;
+          enabled: boolean;
+          mailbox_label: string;
+          search_query: string;
+          polling_minutes: number;
+          provider_config: Json;
+          last_checked_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          provider?:
+            | "gmail_label"
+            | "gmail_query"
+            | "imap_mailbox"
+            | "manual_test";
+          name: string;
+          enabled?: boolean;
+          mailbox_label?: string;
+          search_query?: string;
+          polling_minutes?: number;
+          provider_config?: Json;
+          last_checked_at?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["listing_alert_sources"]["Insert"]
+        >;
+      };
+      listing_alert_messages: {
+        Row: {
+          id: string;
+          source_id: string;
+          external_message_id: string;
+          subject: string;
+          from_address: string;
+          received_at: string;
+          body_text: string;
+          body_html: string;
+          processed_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          source_id: string;
+          external_message_id: string;
+          subject?: string;
+          from_address?: string;
+          received_at: string;
+          body_text?: string;
+          body_html?: string;
+          processed_at?: string | null;
+          created_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["listing_alert_messages"]["Insert"]
+        >;
+      };
+      listing_candidates: {
+        Row: {
+          id: string;
+          source_id: string;
+          message_id: string;
+          external_message_id: string;
+          status: "new" | "imported" | "ignored";
+          imported_property_id: string | null;
+          dedupe_key: string;
+          listing_url: string;
+          mls_id: string;
+          address_line1: string;
+          city: string;
+          state: string;
+          postal_code: string;
+          asking_price: number | null;
+          bedrooms: number | null;
+          bathrooms: number | null;
+          living_sqft: number | null;
+          lot_acres: number | null;
+          year_built: number | null;
+          listing_remarks: string;
+          raw_text: string;
+          extracted_facts_json: Json;
+          confidence: number;
+          warnings: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          source_id: string;
+          message_id: string;
+          external_message_id?: string;
+          status?: "new" | "imported" | "ignored";
+          imported_property_id?: string | null;
+          dedupe_key: string;
+          listing_url?: string;
+          mls_id?: string;
+          address_line1?: string;
+          city?: string;
+          state?: string;
+          postal_code?: string;
+          asking_price?: number | null;
+          bedrooms?: number | null;
+          bathrooms?: number | null;
+          living_sqft?: number | null;
+          lot_acres?: number | null;
+          year_built?: number | null;
+          listing_remarks?: string;
+          raw_text?: string;
+          extracted_facts_json?: Json;
+          confidence?: number;
+          warnings?: Json;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["listing_candidates"]["Insert"]
+        >;
+      };
+      listing_alert_runs: {
+        Row: {
+          id: string;
+          source_id: string;
+          status: "completed" | "failed";
+          started_at: string;
+          completed_at: string;
+          messages_seen: number;
+          candidates_created: number;
+          candidates_updated: number;
+          warnings: Json;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          source_id: string;
+          status?: "completed" | "failed";
+          started_at?: string;
+          completed_at?: string;
+          messages_seen?: number;
+          candidates_created?: number;
+          candidates_updated?: number;
+          warnings?: Json;
+          created_at?: string;
+        };
+        Update: Partial<
+          Database["public"]["Tables"]["listing_alert_runs"]["Insert"]
+        >;
+      };
     };
     Views: Record<string, never>;
     Functions: Record<string, never>;
@@ -388,6 +548,13 @@ export type Database = {
         | "api"
         | "ai_inferred"
         | "verified";
+      listing_alert_source_provider:
+        | "gmail_label"
+        | "gmail_query"
+        | "imap_mailbox"
+        | "manual_test";
+      listing_candidate_status: "new" | "imported" | "ignored";
+      listing_alert_run_status: "completed" | "failed";
     };
     CompositeTypes: Record<string, never>;
   };
