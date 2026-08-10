@@ -8,6 +8,8 @@ import {
   createEmptyListingAlertState,
   createListingAlertSource,
   ingestListingAlertText,
+  LISTING_ALERT_STORAGE_KEY,
+  loadListingAlertState,
   upsertListingAlertSource
 } from "@/lib/listing-alerts/listing-alert-persistence";
 
@@ -143,5 +145,67 @@ describe("listing alert ingestion", () => {
     expect(secondRun.run.candidatesUpdated).toBe(2);
     expect(secondRun.state.candidates).toHaveLength(2);
     expect(secondRun.state.messages).toHaveLength(2);
+  });
+
+  it("stores IMAP connector settings without storing a password", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-imap",
+        name: "MilestoneSW Listing Alerts",
+        provider: "imap_mailbox",
+        connectorConfig: {
+          gmailAccountHint: "",
+          imapHost: "mail.example.com",
+          imapPort: 993,
+          imapSecurity: "ssl_tls",
+          imapUsername: "alerts@example.com",
+          imapMailbox: "INBOX",
+          credentialEnvVar: "REA_LISTING_ALERT_IMAP_PASSWORD"
+        }
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+
+    expect(source.connectorConfig.imapHost).toBe("mail.example.com");
+    expect(source.connectorConfig.imapPort).toBe(993);
+    expect(source.connectorConfig.imapSecurity).toBe("ssl_tls");
+    expect(source.connectorConfig.credentialEnvVar).toBe(
+      "REA_LISTING_ALERT_IMAP_PASSWORD"
+    );
+    expect(Object.keys(source.connectorConfig)).not.toContain("password");
+    expect(Object.keys(source.connectorConfig)).not.toContain("imapPassword");
+  });
+
+  it("backfills connector defaults for older saved alert sources", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-legacy",
+        name: "Legacy Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const legacySource: Record<string, unknown> = { ...source };
+    delete legacySource.connectorConfig;
+    const storage = {
+      getItem: (key: string) =>
+        key === LISTING_ALERT_STORAGE_KEY
+          ? JSON.stringify({
+              schemaVersion: 1,
+              sources: [legacySource],
+              messages: [],
+              candidates: [],
+              runs: []
+            })
+          : null,
+      setItem: () => undefined
+    };
+
+    const result = loadListingAlertState(storage);
+
+    expect(result.source).toBe("storage");
+    expect(result.state.sources[0]?.connectorConfig.imapPort).toBe(993);
+    expect(result.state.sources[0]?.connectorConfig.imapMailbox).toBe("INBOX");
   });
 });

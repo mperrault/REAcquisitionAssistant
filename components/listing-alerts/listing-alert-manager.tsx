@@ -34,6 +34,8 @@ import {
   LISTING_ALERT_STORAGE_KEY
 } from "@/lib/listing-alerts/listing-alert-persistence";
 import type {
+  ListingAlertConnectorConfig,
+  ListingAlertConnectorSecurity,
   ListingAlertSource,
   ListingAlertSourceProvider,
   ListingAlertState,
@@ -87,6 +89,15 @@ const providerOptions: Array<{
   { value: "manual_test", label: "Manual Test Source" }
 ];
 
+const securityOptions: Array<{
+  value: ListingAlertConnectorSecurity;
+  label: string;
+}> = [
+  { value: "ssl_tls", label: "SSL/TLS" },
+  { value: "starttls", label: "STARTTLS" },
+  { value: "none", label: "None" }
+];
+
 const statusOptions: Array<{ value: ListingCandidateStatus | "all"; label: string }> =
   [
     { value: "all", label: "All Candidates" },
@@ -136,6 +147,38 @@ function getCandidateStatusVariant(status: ListingCandidateStatus) {
   }
 
   return "secondary" as const;
+}
+
+function isGmailProvider(provider: ListingAlertSourceProvider) {
+  return provider === "gmail_label" || provider === "gmail_query";
+}
+
+function getConnectorStatus(source: ListingAlertSource | null) {
+  if (!source) {
+    return { label: "No source", variant: "outline" as const };
+  }
+
+  if (source.provider === "manual_test") {
+    return { label: "Test source", variant: "secondary" as const };
+  }
+
+  if (source.provider === "imap_mailbox") {
+    const config = source.connectorConfig;
+    const configured =
+      config.imapHost &&
+      config.imapPort &&
+      config.imapUsername &&
+      config.imapMailbox &&
+      config.credentialEnvVar;
+
+    return configured
+      ? { label: "Settings saved", variant: "success" as const }
+      : { label: "Needs settings", variant: "warning" as const };
+  }
+
+  return source.connectorConfig.gmailAccountHint
+    ? { label: "Account set", variant: "success" as const }
+    : { label: "OAuth pending", variant: "warning" as const };
 }
 
 function createDefaultSource() {
@@ -274,6 +317,19 @@ export function ListingAlertManager() {
 
     setSourceDraft({ ...sourceDraft, ...patch });
     setActionStatus("Unsaved source changes");
+  }
+
+  function updateConnectorConfig(patch: Partial<ListingAlertConnectorConfig>) {
+    if (!sourceDraft) {
+      return;
+    }
+
+    updateSourceDraft({
+      connectorConfig: {
+        ...sourceDraft.connectorConfig,
+        ...patch
+      }
+    });
   }
 
   function handleSelectSource(sourceId: string) {
@@ -480,24 +536,127 @@ export function ListingAlertManager() {
                     ))}
                   </Select>
                 </Field>
-                <Field label="Mailbox Label">
-                  <Input
-                    value={sourceDraft.mailboxLabel}
-                    onChange={(event) =>
-                      updateSourceDraft({ mailboxLabel: event.target.value })
-                    }
-                    placeholder="RE Acquisition Assistant"
-                  />
-                </Field>
-                <Field label="Search Query">
-                  <Textarea
-                    value={sourceDraft.searchQuery}
-                    onChange={(event) =>
-                      updateSourceDraft({ searchQuery: event.target.value })
-                    }
-                    rows={4}
-                  />
-                </Field>
+                {isGmailProvider(sourceDraft.provider) ? (
+                  <>
+                    <Field label="Google Account">
+                      <Input
+                        value={sourceDraft.connectorConfig.gmailAccountHint}
+                        onChange={(event) =>
+                          updateConnectorConfig({
+                            gmailAccountHint: event.target.value
+                          })
+                        }
+                        placeholder="alerts@example.com"
+                      />
+                    </Field>
+                    <Field label="Gmail Label">
+                      <Input
+                        value={sourceDraft.mailboxLabel}
+                        onChange={(event) =>
+                          updateSourceDraft({ mailboxLabel: event.target.value })
+                        }
+                        placeholder="RE Acquisition Assistant"
+                      />
+                    </Field>
+                    <Field label="Gmail Search Query">
+                      <Textarea
+                        value={sourceDraft.searchQuery}
+                        onChange={(event) =>
+                          updateSourceDraft({ searchQuery: event.target.value })
+                        }
+                        rows={4}
+                      />
+                    </Field>
+                  </>
+                ) : null}
+                {sourceDraft.provider === "imap_mailbox" ? (
+                  <>
+                    <Field label="IMAP Host">
+                      <Input
+                        value={sourceDraft.connectorConfig.imapHost}
+                        onChange={(event) =>
+                          updateConnectorConfig({ imapHost: event.target.value })
+                        }
+                        placeholder="mail.example.com"
+                      />
+                    </Field>
+                    <div className="grid grid-cols-[1fr_1fr] gap-3">
+                      <Field label="IMAP Port">
+                        <Input
+                          type="number"
+                          min={1}
+                          value={sourceDraft.connectorConfig.imapPort}
+                          onChange={(event) =>
+                            updateConnectorConfig({
+                              imapPort: Number(event.target.value) || 993
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="Security">
+                        <Select
+                          value={sourceDraft.connectorConfig.imapSecurity}
+                          onChange={(event) =>
+                            updateConnectorConfig({
+                              imapSecurity: event.target
+                                .value as ListingAlertConnectorSecurity
+                            })
+                          }
+                        >
+                          {securityOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    </div>
+                    <Field label="Username">
+                      <Input
+                        value={sourceDraft.connectorConfig.imapUsername}
+                        onChange={(event) =>
+                          updateConnectorConfig({
+                            imapUsername: event.target.value
+                          })
+                        }
+                        placeholder="alerts@example.com"
+                      />
+                    </Field>
+                    <Field label="Mailbox Folder">
+                      <Input
+                        value={sourceDraft.connectorConfig.imapMailbox}
+                        onChange={(event) =>
+                          updateConnectorConfig({
+                            imapMailbox: event.target.value
+                          })
+                        }
+                        placeholder="INBOX"
+                      />
+                    </Field>
+                    <Field label="Password Secret">
+                      <Input
+                        value={sourceDraft.connectorConfig.credentialEnvVar}
+                        onChange={(event) =>
+                          updateConnectorConfig({
+                            credentialEnvVar: event.target.value
+                          })
+                        }
+                        placeholder="REA_LISTING_ALERT_IMAP_PASSWORD"
+                      />
+                    </Field>
+                  </>
+                ) : null}
+                {sourceDraft.provider === "manual_test" ? (
+                  <Field label="Test Label">
+                    <Input
+                      value={sourceDraft.mailboxLabel}
+                      onChange={(event) =>
+                        updateSourceDraft({ mailboxLabel: event.target.value })
+                      }
+                      placeholder="Parser Test"
+                    />
+                  </Field>
+                ) : null}
                 <div className="grid grid-cols-[1fr_auto] items-end gap-3">
                   <Field label="Polling Minutes">
                     <Input
@@ -530,7 +689,13 @@ export function ListingAlertManager() {
           <div className="grid gap-3 text-sm">
             <div className="flex items-center justify-between gap-3">
               <span className="text-muted-foreground">Connector</span>
-              <Badge variant="warning">OAuth pending</Badge>
+              <Badge variant={getConnectorStatus(selectedSource).variant}>
+                {getConnectorStatus(selectedSource).label}
+              </Badge>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Runtime</span>
+              <Badge variant="warning">Poller pending</Badge>
             </div>
             <div className="flex items-center justify-between gap-3">
               <span className="text-muted-foreground">Last checked</span>
@@ -713,4 +878,3 @@ export function ListingAlertManager() {
     </div>
   );
 }
-

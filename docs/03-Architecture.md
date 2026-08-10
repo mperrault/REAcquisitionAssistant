@@ -106,6 +106,7 @@ Listing URLs may be stored. The app should not require unauthorized scraping to 
 Property intake should be designed as a permitted-ingestion pipeline with listing-alert email ingestion as the no-MLS MVP path:
 
 - configured Gmail label/query or IMAP mailbox
+- connector configuration for provider, host, port, username, mailbox/folder, and credential secret name
 - ingestion runs that fetch only new alert messages
 - raw message preservation for audit/debugging
 - listing-candidate extraction and deduplication
@@ -114,6 +115,8 @@ Property intake should be designed as a permitted-ingestion pipeline with listin
 - licensed feed or provider API later
 
 Every imported fact should preserve source/provenance and verification state.
+
+Mailbox passwords or OAuth tokens should never be stored in browser local storage. Listing-alert sources may store a server-side secret name such as `REA_LISTING_ALERT_IMAP_PASSWORD`; the secret value must live in environment variables or managed deployment secrets.
 
 ## Suggested project structure
 

@@ -13,6 +13,7 @@ The MVP can primarily use Next.js server actions or route handlers backed by Sup
 ## Listing-alert ingestion operations
 
 - create/update/list listing-alert sources
+- configure provider connection metadata without storing mailbox passwords
 - run enabled source ingestion
 - persist alert message metadata and raw text
 - parse alert messages into listing candidates
@@ -87,3 +88,5 @@ Future options may include:
 - browser-assisted user import
 
 The no-MLS MVP should ingest saved-search listing-alert emails from configured user-controlled sources. Parser test input may accept user-provided text, but the product workflow should not require manual copy/paste. If parsing is uncertain, preserve raw alert text, create inspectable candidates, and mark extracted facts as unverified.
+
+For IMAP sources, persist host, port, security mode, username, mailbox folder, and the server-side password secret name. Do not persist the password itself in the browser or database.

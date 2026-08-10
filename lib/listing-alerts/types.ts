@@ -13,6 +13,42 @@ export type ListingAlertSourceProvider = z.infer<
   typeof listingAlertSourceProviderSchema
 >;
 
+export const listingAlertConnectorSecuritySchema = z.enum([
+  "ssl_tls",
+  "starttls",
+  "none"
+]);
+
+export type ListingAlertConnectorSecurity = z.infer<
+  typeof listingAlertConnectorSecuritySchema
+>;
+
+export const listingAlertConnectorConfigDefaults = {
+  gmailAccountHint: "",
+  imapHost: "",
+  imapPort: 993,
+  imapSecurity: "ssl_tls" as const,
+  imapUsername: "",
+  imapMailbox: "INBOX",
+  credentialEnvVar: "REA_LISTING_ALERT_IMAP_PASSWORD"
+};
+
+export const listingAlertConnectorConfigSchema = z
+  .object({
+    gmailAccountHint: z.string(),
+    imapHost: z.string(),
+    imapPort: z.number().int().positive(),
+    imapSecurity: listingAlertConnectorSecuritySchema,
+    imapUsername: z.string(),
+    imapMailbox: z.string(),
+    credentialEnvVar: z.string()
+  })
+  .default(listingAlertConnectorConfigDefaults);
+
+export type ListingAlertConnectorConfig = z.infer<
+  typeof listingAlertConnectorConfigSchema
+>;
+
 export const listingAlertSourceSchema = z.object({
   id: z.string().min(1),
   provider: listingAlertSourceProviderSchema,
@@ -20,6 +56,7 @@ export const listingAlertSourceSchema = z.object({
   enabled: z.boolean(),
   mailboxLabel: z.string(),
   searchQuery: z.string(),
+  connectorConfig: listingAlertConnectorConfigSchema,
   pollingMinutes: z.number().int().positive(),
   lastCheckedAt: z.string().datetime().nullable(),
   createdAt: z.string().datetime(),
@@ -126,4 +163,3 @@ export const listingAlertStateSchema = z.object({
 });
 
 export type ListingAlertState = z.infer<typeof listingAlertStateSchema>;
-

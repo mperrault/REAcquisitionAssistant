@@ -2,6 +2,7 @@ import {
   type ListingAlertMessage,
   type ListingAlertMessageInput,
   type ListingAlertRun,
+  listingAlertConnectorConfigDefaults,
   type ListingAlertSource,
   type ListingAlertSourceProvider,
   type ListingAlertState,
@@ -75,6 +76,10 @@ export function createListingAlertSource(
     searchQuery:
       patch.searchQuery ??
       'label:"RE Acquisition Assistant" newer_than:30d -category:promotions',
+    connectorConfig: {
+      ...listingAlertConnectorConfigDefaults,
+      ...patch.connectorConfig
+    },
     pollingMinutes: patch.pollingMinutes ?? 30,
     lastCheckedAt: patch.lastCheckedAt ?? null,
     createdAt: patch.createdAt ?? timestamp,
@@ -346,4 +351,3 @@ export function markListingCandidateIgnored(
     )
   });
 }
-
