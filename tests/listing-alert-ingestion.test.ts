@@ -5,14 +5,20 @@ import {
   parseListingAlertText
 } from "@/lib/listing-alerts/listing-alert-parser";
 import {
+  applyListingCandidateGeographyFilter,
+  OUTSIDE_PROFILE_GEOGRAPHY_WARNING
+} from "@/lib/listing-alerts/geography-filter";
+import {
   clearListingAlertQueue,
   createEmptyListingAlertState,
   createListingAlertSource,
   ingestListingAlertText,
   LISTING_ALERT_STORAGE_KEY,
   loadListingAlertState,
+  reprocessListingAlertMessages,
   upsertListingAlertSource
 } from "@/lib/listing-alerts/listing-alert-persistence";
+import { quietCornerSeedProfile } from "@/lib/profiles/quiet-corner-seed";
 
 const timestamp = "2026-08-10T22:00:00.000Z";
 
@@ -309,6 +315,63 @@ describe("listing alert ingestion", () => {
     expect(secondRun.state.messages).toHaveLength(2);
   });
 
+  it("reprocesses stored messages without advancing the mailbox cursor", () => {
+    const cursorTimestamp = "2026-08-11T00:00:00.000Z";
+    const reprocessTimestamp = "2026-08-11T01:00:00.000Z";
+    const source = createListingAlertSource(
+      {
+        id: "source-reprocess",
+        name: "Saved Search Alerts",
+        lastCheckedAt: cursorTimestamp
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const ingested = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-reprocess",
+        subject: "Stored alert",
+        from: "alerts@example.com",
+        receivedAt: timestamp,
+        bodyText: alertText
+      },
+      timestamp,
+      deterministicIds("ingest")
+    );
+    const stateWithCursor = {
+      ...ingested.state,
+      sources: ingested.state.sources.map((item) =>
+        item.id === source.id
+          ? {
+              ...item,
+              lastCheckedAt: cursorTimestamp,
+              updatedAt: cursorTimestamp
+            }
+          : item
+      )
+    };
+    const reprocessed = reprocessListingAlertMessages(
+      stateWithCursor,
+      source.id,
+      reprocessTimestamp,
+      deterministicIds("reprocess")
+    );
+
+    expect(reprocessed.messagesProcessed).toBe(1);
+    expect(reprocessed.candidatesCreated).toBe(0);
+    expect(reprocessed.candidatesUpdated).toBe(2);
+    expect(reprocessed.run?.messagesSeen).toBe(1);
+    expect(reprocessed.state.sources[0]?.lastCheckedAt).toBe(cursorTimestamp);
+    expect(reprocessed.state.candidates).toHaveLength(2);
+  });
+
   it("uses the alert subject when the message body omits the address", () => {
     const source = createListingAlertSource(
       {
@@ -350,6 +413,67 @@ ${zillowRedirectUrl("57651702")}`,
       "No address or town found."
     );
     expect(result.candidates[0]?.primaryPhotoUrl).toBe(zillowInstantPhotoUrl);
+  });
+
+  it("ignores new candidates outside the active profile geography", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-geography",
+        name: "Zillow Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const result = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-geography",
+        subject: "Mixed geography alert",
+        from: "Zillow <instant-updates@mail.zillow.com>",
+        receivedAt: timestamp,
+        bodyText: `New listings matching your saved search
+
+15 Main Street, Stafford Springs, CT 06076
+$299,000
+3 bd | 2 ba | 1,420 sqft
+View this listing -
+https://example.com/stafford-springs
+
+58 Ashworth Street, Manchester, CT 06040
+$300,000
+3 bd | 1 ba | 1,232 sqft
+View this listing -
+https://example.com/manchester`
+      },
+      timestamp,
+      deterministicIds("geography")
+    );
+    const filtered = applyListingCandidateGeographyFilter(
+      result.state,
+      quietCornerSeedProfile,
+      timestamp
+    );
+    const stafford = filtered.state.candidates.find(
+      (candidate) => candidate.addressLine1 === "15 Main Street"
+    );
+    const manchester = filtered.state.candidates.find(
+      (candidate) => candidate.addressLine1 === "58 Ashworth Street"
+    );
+
+    expect(filtered.ignoredCount).toBe(1);
+    expect(stafford?.city).toBe("Stafford Springs");
+    expect(stafford?.status).toBe("new");
+    expect(manchester?.city).toBe("Manchester");
+    expect(manchester?.status).toBe("ignored");
+    expect(manchester?.warnings).toContain(
+      OUTSIDE_PROFILE_GEOGRAPHY_WARNING
+    );
   });
 
   it("clears the queue without removing source configuration", () => {

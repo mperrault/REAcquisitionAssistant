@@ -26,6 +26,10 @@ import {
   createPropertyDraftFromListingCandidate
 } from "@/lib/listing-alerts/listing-alert-parser";
 import {
+  applyListingCandidateGeographyFilter,
+  countEnabledProfileTowns
+} from "@/lib/listing-alerts/geography-filter";
+import {
   clearListingAlertQueue,
   createEmptyListingAlertState,
   createListingAlertSource,
@@ -34,6 +38,7 @@ import {
   markListingAlertSourceChecked,
   markListingCandidateIgnored,
   markListingCandidateImported,
+  reprocessListingAlertMessages,
   saveListingAlertState,
   upsertListingAlertSource,
   LISTING_ALERT_STORAGE_KEY
@@ -141,6 +146,18 @@ function formatAddress(candidate: ListingCandidate) {
   );
 
   return parts.join(", ") || "Untitled listing candidate";
+}
+
+function getActiveProfile(profileState: ProfileState | null) {
+  if (!profileState) {
+    return null;
+  }
+
+  return (
+    profileState.profiles.find(
+      (profile) => profile.id === profileState.activeProfileId
+    ) ?? null
+  );
 }
 
 function getCandidateStatusVariant(status: ListingCandidateStatus) {
@@ -298,18 +315,34 @@ export function ListingAlertManager() {
   React.useEffect(() => {
     const alertResult = loadListingAlertState(window.localStorage);
     let loadedAlertState = alertResult.state;
+    let shouldPersistAlertState = false;
 
     if (loadedAlertState.sources.length === 0) {
       loadedAlertState = upsertListingAlertSource(
         loadedAlertState,
         createDefaultSource()
       );
-      saveListingAlertState(window.localStorage, loadedAlertState);
+      shouldPersistAlertState = true;
     }
 
     const propertyResult = loadPropertyState(window.localStorage);
     const profileResult = loadProfileState(window.localStorage);
     const scoreResult = loadScoreState(window.localStorage);
+    const loadedActiveProfile = getActiveProfile(profileResult.state);
+    const geographyFilter = applyListingCandidateGeographyFilter(
+      loadedAlertState,
+      loadedActiveProfile
+    );
+
+    loadedAlertState = geographyFilter.state;
+
+    if (shouldPersistAlertState || geographyFilter.ignoredCount > 0) {
+      loadedAlertState = saveListingAlertState(
+        window.localStorage,
+        loadedAlertState
+      );
+    }
+
     const firstSource = loadedAlertState.sources[0] ?? null;
 
     setListingState(loadedAlertState);
@@ -319,6 +352,11 @@ export function ListingAlertManager() {
     setSelectedSourceId(firstSource?.id ?? null);
     setSourceDraft(firstSource ? cloneSource(firstSource) : null);
     setLoadSource(alertResult.source === "empty" ? "storage" : alertResult.source);
+    setActionStatus(
+      geographyFilter.ignoredCount > 0
+        ? `${geographyFilter.ignoredCount} ignored by geography`
+        : "Ready"
+    );
   }, []);
 
   const selectedSource = React.useMemo(
@@ -329,16 +367,13 @@ export function ListingAlertManager() {
   );
 
   const activeProfile = React.useMemo(() => {
-    if (!profileState) {
-      return null;
-    }
-
-    return (
-      profileState.profiles.find(
-        (profile) => profile.id === profileState.activeProfileId
-      ) ?? null
-    );
+    return getActiveProfile(profileState);
   }, [profileState]);
+
+  const enabledTownCount = React.useMemo(
+    () => countEnabledProfileTowns(activeProfile),
+    [activeProfile]
+  );
 
   const candidateCounts = React.useMemo(() => {
     return listingState.candidates.reduce<Record<string, number>>(
@@ -361,6 +396,15 @@ export function ListingAlertManager() {
   });
 
   const latestRun = listingState.runs[0] ?? null;
+  const selectedSourceMessageCount = React.useMemo(() => {
+    if (!selectedSourceId) {
+      return 0;
+    }
+
+    return listingState.messages.filter(
+      (message) => message.sourceId === selectedSourceId
+    ).length;
+  }, [listingState.messages, selectedSourceId]);
 
   function persistListingState(nextState: ListingAlertState, status: string) {
     const persisted = saveListingAlertState(window.localStorage, nextState);
@@ -466,10 +510,46 @@ export function ListingAlertManager() {
       },
       timestamp
     );
+    const geographyFilter = applyListingCandidateGeographyFilter(
+      result.state,
+      activeProfile,
+      timestamp
+    );
+    const geographyStatus =
+      geographyFilter.ignoredCount > 0
+        ? `, ${geographyFilter.ignoredCount} ignored by geography`
+        : "";
 
     persistListingState(
+      geographyFilter.state,
+      `${result.run.candidatesCreated} new, ${result.run.candidatesUpdated} updated${geographyStatus}`
+    );
+  }
+
+  function handleReprocessQueue() {
+    if (!selectedSource || selectedSourceMessageCount === 0) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const result = reprocessListingAlertMessages(
+      listingState,
+      selectedSource.id,
+      timestamp
+    );
+    const geographyFilter = applyListingCandidateGeographyFilter(
       result.state,
-      `${result.run.candidatesCreated} new, ${result.run.candidatesUpdated} updated`
+      activeProfile,
+      timestamp
+    );
+    const geographyStatus =
+      geographyFilter.ignoredCount > 0
+        ? `, ${geographyFilter.ignoredCount} ignored by geography`
+        : "";
+
+    persistListingState(
+      geographyFilter.state,
+      `${result.messagesProcessed} messages reprocessed, ${result.candidatesCreated} new, ${result.candidatesUpdated} updated${geographyStatus}`
     );
   }
 
@@ -533,10 +613,19 @@ export function ListingAlertManager() {
         selectedSource.id,
         pollResult.checkedAt
       );
+      const geographyFilter = applyListingCandidateGeographyFilter(
+        nextListingState,
+        activeProfile,
+        pollResult.checkedAt
+      );
+      const geographyStatus =
+        geographyFilter.ignoredCount > 0
+          ? `, ${geographyFilter.ignoredCount} ignored by geography`
+          : "";
 
       persistListingState(
-        nextListingState,
-        `${pollResult.messages.length} messages, ${candidatesCreated} new, ${candidatesUpdated} updated`
+        geographyFilter.state,
+        `${pollResult.messages.length} messages, ${candidatesCreated} new, ${candidatesUpdated} updated${geographyStatus}`
       );
     } catch (error) {
       setActionStatus(
@@ -606,6 +695,9 @@ export function ListingAlertManager() {
             <Badge variant="outline">
               {listingState.candidates.length} candidates
             </Badge>
+            <Badge variant={enabledTownCount > 0 ? "outline" : "warning"}>
+              {enabledTownCount} towns
+            </Badge>
           </div>
           <h1 className="text-2xl font-semibold tracking-normal sm:text-3xl">
             Listing Alerts
@@ -626,6 +718,15 @@ export function ListingAlertManager() {
           <Button type="button" variant="outline" onClick={handleNewSource}>
             <Plus aria-hidden="true" />
             Source
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleReprocessQueue}
+            disabled={!selectedSource || selectedSourceMessageCount === 0}
+          >
+            <RefreshCw aria-hidden="true" />
+            Reprocess
           </Button>
           <Button
             type="button"

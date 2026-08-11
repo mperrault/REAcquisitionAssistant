@@ -40,6 +40,15 @@ export type IngestListingAlertTextResult = {
   candidates: ListingCandidate[];
 };
 
+export type ReprocessListingAlertMessagesResult = {
+  state: ListingAlertState;
+  run: ListingAlertRun | null;
+  messagesProcessed: number;
+  candidatesCreated: number;
+  candidatesUpdated: number;
+  warnings: string[];
+};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -313,6 +322,94 @@ export function ingestListingAlertText(
     run,
     message,
     candidates: parsedCandidates
+  };
+}
+
+export function reprocessListingAlertMessages(
+  state: ListingAlertState,
+  sourceId: string,
+  timestamp = nowIso(),
+  createId = () => createListingAlertId("alert")
+): ReprocessListingAlertMessagesResult {
+  const source = state.sources.find((item) => item.id === sourceId);
+
+  if (!source) {
+    throw new Error(`Listing alert source ${sourceId} does not exist.`);
+  }
+
+  const messages = state.messages
+    .filter((message) => message.sourceId === sourceId)
+    .sort(
+      (a, b) =>
+        new Date(a.receivedAt).getTime() - new Date(b.receivedAt).getTime()
+    );
+
+  if (messages.length === 0) {
+    return {
+      state,
+      run: null,
+      messagesProcessed: 0,
+      candidatesCreated: 0,
+      candidatesUpdated: 0,
+      warnings: []
+    };
+  }
+
+  let nextCandidates = state.candidates;
+  let candidatesCreated = 0;
+  let candidatesUpdated = 0;
+  const warnings: string[] = [];
+
+  for (const message of messages) {
+    const parserInput = [message.subject, message.bodyText]
+      .filter(Boolean)
+      .join("\n\n");
+    const parseResult = parseListingAlertText(parserInput, {
+      timestamp,
+      createId,
+      bodyHtml: message.bodyHtml
+    });
+    const parsedCandidates = parseResult.candidates.map((candidate) =>
+      createListingCandidate(sourceId, message, candidate, timestamp, createId)
+    );
+    const upsertedCandidates = upsertCandidates(
+      nextCandidates,
+      parsedCandidates,
+      timestamp
+    );
+
+    nextCandidates = upsertedCandidates.candidates;
+    candidatesCreated += upsertedCandidates.candidatesCreated;
+    candidatesUpdated += upsertedCandidates.candidatesUpdated;
+    warnings.push(
+      ...parseResult.warnings,
+      ...parsedCandidates.flatMap((candidate) => candidate.warnings)
+    );
+  }
+
+  const run = listingAlertRunSchema.parse({
+    id: createId(),
+    sourceId,
+    status: "completed",
+    startedAt: timestamp,
+    completedAt: timestamp,
+    messagesSeen: messages.length,
+    candidatesCreated,
+    candidatesUpdated,
+    warnings
+  });
+
+  return {
+    state: listingAlertStateSchema.parse({
+      ...state,
+      candidates: nextCandidates,
+      runs: [run, ...state.runs]
+    }),
+    run,
+    messagesProcessed: messages.length,
+    candidatesCreated,
+    candidatesUpdated,
+    warnings
   };
 }
 
