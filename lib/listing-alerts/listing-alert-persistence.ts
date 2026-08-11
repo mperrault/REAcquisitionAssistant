@@ -261,7 +261,10 @@ export function ingestListingAlertText(
   }
 
   const message = createListingAlertMessage(sourceId, input, timestamp, createId);
-  const parseResult = parseListingAlertText(input.bodyText, {
+  const parserInput = [input.subject, input.bodyText]
+    .filter(Boolean)
+    .join("\n\n");
+  const parseResult = parseListingAlertText(parserInput, {
     timestamp,
     createId
   });
