@@ -4,6 +4,7 @@ import Image from "next/image";
 import * as React from "react";
 import {
   CheckCircle2,
+  ImageOff,
   Inbox,
   Play,
   Plus,
@@ -1050,7 +1051,12 @@ export function ListingAlertManager() {
                               referrerPolicy="no-referrer"
                             />
                           </div>
-                        ) : null}
+                        ) : (
+                          <div className="flex h-32 w-full shrink-0 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-secondary text-center text-xs font-medium text-muted-foreground sm:h-28 sm:w-40">
+                            <ImageOff aria-hidden="true" className="size-5" />
+                            <span>No photo in alert</span>
+                          </div>
+                        )}
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="text-base font-semibold">
@@ -1069,7 +1075,9 @@ export function ListingAlertManager() {
                               <Badge variant="outline">
                                 {candidate.photoUrls.length || 1} photo
                               </Badge>
-                            ) : null}
+                            ) : (
+                              <Badge variant="warning">No photo in alert</Badge>
+                            )}
                           </div>
                           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                             <span>{provenance.sourceName}</span>
