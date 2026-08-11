@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import * as React from "react";
 import {
   CheckCircle2,
@@ -934,62 +935,85 @@ export function ListingAlertManager() {
                 return (
                   <article key={candidate.id} className="p-4 sm:p-5">
                     <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-base font-semibold">
-                            {formatAddress(candidate)}
-                          </h3>
-                          <Badge
-                            variant={getCandidateStatusVariant(candidate.status)}
-                          >
-                            {candidate.status}
-                          </Badge>
-                          <Badge variant="outline">
-                            {Math.round(candidate.confidence * 100)}% parsed
-                          </Badge>
-                          <Badge variant="outline">{provenance.label}</Badge>
-                        </div>
-                        <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                          <span>{provenance.sourceName}</span>
-                          <span>{formatDateTime(provenance.receivedAt)}</span>
-                          {provenance.from ? <span>{provenance.from}</span> : null}
-                          {provenance.messageSubject ? (
-                            <span className="block max-w-[28rem] truncate">
-                              {provenance.messageSubject}
+                      <div className="flex min-w-0 flex-1 flex-col gap-4 sm:flex-row">
+                        {candidate.primaryPhotoUrl ? (
+                          <div className="relative h-32 w-full shrink-0 overflow-hidden rounded-md border border-border bg-secondary sm:h-28 sm:w-40">
+                            <Image
+                              src={candidate.primaryPhotoUrl}
+                              alt={`${formatAddress(candidate)} listing photo`}
+                              fill
+                              sizes="(min-width: 640px) 160px, 100vw"
+                              className="object-cover"
+                              loading="lazy"
+                              unoptimized
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        ) : null}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="text-base font-semibold">
+                              {formatAddress(candidate)}
+                            </h3>
+                            <Badge
+                              variant={getCandidateStatusVariant(candidate.status)}
+                            >
+                              {candidate.status}
+                            </Badge>
+                            <Badge variant="outline">
+                              {Math.round(candidate.confidence * 100)}% parsed
+                            </Badge>
+                            <Badge variant="outline">{provenance.label}</Badge>
+                            {candidate.primaryPhotoUrl ? (
+                              <Badge variant="outline">
+                                {candidate.photoUrls.length || 1} photo
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                            <span>{provenance.sourceName}</span>
+                            <span>{formatDateTime(provenance.receivedAt)}</span>
+                            {provenance.from ? (
+                              <span>{provenance.from}</span>
+                            ) : null}
+                            {provenance.messageSubject ? (
+                              <span className="block max-w-[28rem] truncate">
+                                {provenance.messageSubject}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                            <span>{formatCurrency(candidate.askingPrice)}</span>
+                            <span>
+                              {candidate.bedrooms ?? "-"} bd /{" "}
+                              {candidate.bathrooms ?? "-"} ba
                             </span>
-                          ) : null}
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                          <span>{formatCurrency(candidate.askingPrice)}</span>
-                          <span>
-                            {candidate.bedrooms ?? "-"} bd /{" "}
-                            {candidate.bathrooms ?? "-"} ba
-                          </span>
-                          <span>
-                            {candidate.livingSqft
-                              ? `${candidate.livingSqft.toLocaleString()} sqft`
-                              : "Sqft unknown"}
-                          </span>
-                          <span>
-                            {candidate.lotAcres
-                              ? `${candidate.lotAcres} acres`
-                              : "Acreage unknown"}
-                          </span>
-                        </div>
-                        <p className="mt-3 line-clamp-3 max-w-5xl text-sm text-muted-foreground">
-                          {candidate.listingRemarks || candidate.rawText}
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {candidate.facts.slice(0, 6).map((fact) => (
-                            <Badge key={fact.id} variant="outline">
-                              {fact.label}
-                            </Badge>
-                          ))}
-                          {candidate.warnings.map((warning) => (
-                            <Badge key={warning} variant="warning">
-                              {warning}
-                            </Badge>
-                          ))}
+                            <span>
+                              {candidate.livingSqft
+                                ? `${candidate.livingSqft.toLocaleString()} sqft`
+                                : "Sqft unknown"}
+                            </span>
+                            <span>
+                              {candidate.lotAcres
+                                ? `${candidate.lotAcres} acres`
+                                : "Acreage unknown"}
+                            </span>
+                          </div>
+                          <p className="mt-3 line-clamp-3 max-w-5xl text-sm text-muted-foreground">
+                            {candidate.listingRemarks || candidate.rawText}
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {candidate.facts.slice(0, 6).map((fact) => (
+                              <Badge key={fact.id} variant="outline">
+                                {fact.label}
+                              </Badge>
+                            ))}
+                            {candidate.warnings.map((warning) => (
+                              <Badge key={warning} variant="warning">
+                                {warning}
+                              </Badge>
+                            ))}
+                          </div>
                         </div>
                       </div>
 

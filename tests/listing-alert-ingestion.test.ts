@@ -48,6 +48,17 @@ function zillowRedirectUrl(zpid: string) {
   )}`;
 }
 
+const zillowInstantPhotoUrl =
+  "https://photos.zillowstatic.com/fp/ec564b89deebd43e77b0f8451df51b36-zui_propcard_lg_1008_528.jpg";
+const zillowInstantPhotoThumbUrl =
+  "https://photos.zillowstatic.com/fp/ec564b89deebd43e77b0f8451df51b36-zui_propcard_lg_504_264.jpg";
+const zillowDigestPhotoUrls = [
+  "https://photos.zillowstatic.com/fp/bd2274cfa8e269669925aecbde959d6e-p_e.jpg",
+  "https://photos.zillowstatic.com/fp/e60db1b03de7b73c6b0c4936972f2b8b-p_e.jpg"
+];
+const zillowMlsLogoUrl =
+  "https://photos.zillowstatic.com/fp/d79c34cc3fb9c13a4cbe1437a108a1d7-l_c.jpg";
+
 const zillowInstantAlertText = `New Listing: 18 Fiske Hill Rd Sturbridge, MA 01566. Your 'For Sale near Stafford Springs CT 06076' search
 
 Latest results for your For Sale near Stafford Springs CT 06076 search.
@@ -84,6 +95,16 @@ Seattle, WA 98101
 Unsubscribe from this email -
 https://click.mail.zillow.com/f/a/unsub?target=https%3A%2F%2Fwww.zillow.com%2Femail%2Funsubscribe`;
 
+const zillowInstantAlertHtml = `<html>
+  <body>
+    <img src="https://zillowstatic.com/s3/email-statics/images/zui/logo_zillow_lm.png" alt="Zillow" width="134" height="36" />
+    <div style="background-image: url('${zillowInstantPhotoThumbUrl}')"></div>
+    <img src="${zillowInstantPhotoUrl}" alt="18 Fiske Hill Rd" width="1008" height="528" />
+    <img src="${zillowMlsLogoUrl}" alt="MLS Logo" height="23" />
+    <img src="https://click.mail.zillow.com/q/tracker" width="1" height="1" />
+  </body>
+</html>`;
+
 const zillowDigestAlertText = `Daily results straight to your inbox.
 
 Zillow (r) -
@@ -115,6 +136,18 @@ https://click.mail.zillow.com/f/a/loan?target=https%3A%2F%2Fwww.zillow.com%2Fhom
 Zillow, Inc.
 1301 Second Avenue, Floor 36
 Seattle, WA 98101`;
+
+const zillowDigestAlertHtml = `<html>
+  <body>
+    <img src="https://zillowstatic.com/s3/email-statics/images/Zillow_Logo_300x64.png" alt="Zillow" />
+    <img src="${zillowDigestPhotoUrls[0]}" alt="289 Morgan St" />
+    <img src="${zillowDigestPhotoUrls[0]}" alt="289 Morgan St duplicate" />
+    <a href="${zillowRedirectUrl("11111111")}">View this listing</a>
+    <img src="${zillowDigestPhotoUrls[1]}" alt="50 Phelps St" />
+    <a href="${zillowRedirectUrl("22222222")}">View this listing</a>
+    <img src="https://www.zillowstatic.com/bedrock/app/uploads/sites/36/2024/03/icon_house.png" alt="House Icon" />
+  </body>
+</html>`;
 
 describe("listing alert ingestion", () => {
   it("extracts listing candidates from saved-search alert text", () => {
@@ -151,7 +184,8 @@ describe("listing alert ingestion", () => {
   it("extracts a Zillow instant alert without creating URL-only candidates", () => {
     const result = parseListingAlertText(zillowInstantAlertText, {
       timestamp,
-      createId: deterministicIds("fact")
+      createId: deterministicIds("fact"),
+      bodyHtml: zillowInstantAlertHtml
     });
 
     expect(result.warnings).toEqual([]);
@@ -167,13 +201,16 @@ describe("listing alert ingestion", () => {
     expect(candidate?.bathrooms).toBe(2);
     expect(candidate?.livingSqft).toBe(1404);
     expect(candidate?.listingUrl).toContain("57651702_zpid");
+    expect(candidate?.primaryPhotoUrl).toBe(zillowInstantPhotoUrl);
+    expect(candidate?.photoUrls).toEqual([zillowInstantPhotoUrl]);
     expect(candidate?.warnings).toEqual([]);
   });
 
   it("extracts Zillow daily digest cards and ignores saved-search criteria", () => {
     const result = parseListingAlertText(zillowDigestAlertText, {
       timestamp,
-      createId: deterministicIds("fact")
+      createId: deterministicIds("fact"),
+      bodyHtml: zillowDigestAlertHtml
     });
 
     expect(result.warnings).toEqual([]);
@@ -190,12 +227,16 @@ describe("listing alert ingestion", () => {
     expect(result.candidates.map((candidate) => candidate.bathrooms)).toEqual([
       2, 1
     ]);
+    expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual(
+      zillowDigestPhotoUrls
+    );
   });
 
   it("creates an editable property draft without manually entering fields", () => {
-    const result = parseListingAlertText(alertText, {
+    const result = parseListingAlertText(zillowInstantAlertText, {
       timestamp,
-      createId: deterministicIds("fact")
+      createId: deterministicIds("fact"),
+      bodyHtml: zillowInstantAlertHtml
     });
     const candidate = result.candidates[0];
 
@@ -207,13 +248,13 @@ describe("listing alert ingestion", () => {
       deterministicIds("property")
     );
 
-    expect(property.addressLine1).toBe("287 County Road");
-    expect(property.city).toBe("Woodstock");
-    expect(property.listingUrl).toBe(
-      "https://example.com/listing/287-county-road"
-    );
-    expect(property.askingPrice).toBe(329900);
-    expect(property.listingRemarks).toContain("Open fields");
+    expect(property.addressLine1).toBe("18 Fiske Hill Rd");
+    expect(property.city).toBe("Sturbridge");
+    expect(property.listingUrl).toContain("57651702_zpid");
+    expect(property.primaryPhotoUrl).toBe(zillowInstantPhotoUrl);
+    expect(property.photoUrls).toEqual([zillowInstantPhotoUrl]);
+    expect(property.askingPrice).toBe(400000);
+    expect(property.listingRemarks).toContain("For sale by owner");
     expect(property.facts.every((fact) => fact.sourceType === "listing")).toBe(
       true
     );
@@ -295,7 +336,8 @@ describe("listing alert ingestion", () => {
 $400,000
 3 bd | 2 ba | 1,404 sqft
 View this listing -
-${zillowRedirectUrl("57651702")}`
+${zillowRedirectUrl("57651702")}`,
+        bodyHtml: zillowInstantAlertHtml
       },
       timestamp,
       deterministicIds("subject")
@@ -307,6 +349,7 @@ ${zillowRedirectUrl("57651702")}`
     expect(result.candidates[0]?.warnings).not.toContain(
       "No address or town found."
     );
+    expect(result.candidates[0]?.primaryPhotoUrl).toBe(zillowInstantPhotoUrl);
   });
 
   it("clears the queue without removing source configuration", () => {

@@ -112,6 +112,8 @@ export const listingCandidateExtractSchema = z.object({
   livingSqft: z.number().int().nonnegative().nullable(),
   lotAcres: z.number().nonnegative().nullable(),
   yearBuilt: z.number().int().nonnegative().nullable(),
+  primaryPhotoUrl: z.string().default(""),
+  photoUrls: z.array(z.string()).default([]),
   listingRemarks: z.string(),
   rawText: z.string(),
   facts: z.array(propertyFactSchema),

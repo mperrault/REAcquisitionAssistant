@@ -41,6 +41,8 @@ describe("property persistence", () => {
     expect(property.addressLine1).toBe("");
     expect(property.askingPrice).toBeNull();
     expect(property.bedrooms).toBeNull();
+    expect(property.primaryPhotoUrl).toBe("");
+    expect(property.photoUrls).toEqual([]);
     expect(property.lifecycleStatus).toBe("new");
     expect(property.city).toBe("Stafford");
   });
@@ -54,6 +56,8 @@ describe("property persistence", () => {
         addressLine1: "12 Pasture Road",
         city: "Woodstock",
         state: "CT",
+        primaryPhotoUrl: "https://photos.example.com/12-pasture-road.jpg",
+        photoUrls: ["https://photos.example.com/12-pasture-road.jpg"],
         askingPrice: 329000,
         lifecycleStatus: "watch_list",
         facts: [
@@ -82,6 +86,12 @@ describe("property persistence", () => {
 
     expect(reloaded.source).toBe("storage");
     expect(reloadedProperty?.addressLine1).toBe("12 Pasture Road");
+    expect(reloadedProperty?.primaryPhotoUrl).toBe(
+      "https://photos.example.com/12-pasture-road.jpg"
+    );
+    expect(reloadedProperty?.photoUrls).toEqual([
+      "https://photos.example.com/12-pasture-road.jpg"
+    ]);
     expect(reloadedProperty?.lifecycleStatus).toBe("watch_list");
     expect(reloadedProperty?.facts[0]).toMatchObject({
       factKey: "setting.open_fields_pastoral",

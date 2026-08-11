@@ -11,6 +11,7 @@ import {
 type ParseOptions = {
   timestamp?: string;
   createId?: () => string;
+  bodyHtml?: string;
 };
 
 type FeaturePattern = {
@@ -21,6 +22,7 @@ type FeaturePattern = {
 };
 
 const urlPattern = /https?:\/\/[^\s<>"')]+/gi;
+const htmlUrlPattern = /https?:\/\/[^\s"'<>\\)]+/gi;
 const streetNumberPatternSource = String.raw`\d{1,6}(?:-\d{1,6})?`;
 const streetSuffixPatternSource = String.raw`(?:street|st|road|rd|avenue|ave|lane|ln|drive|dr|court|ct|circle|cir|way|trail|trl|terrace|ter|place|pl|pike|highway|hwy|turnpike|tpke|boulevard|blvd|route|rt)`;
 const addressStartPattern = new RegExp(
@@ -178,6 +180,17 @@ function normalizeText(value: string) {
     .trim();
 }
 
+function decodeHtmlValue(value: string) {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .trim();
+}
+
 function defaultCreateId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -239,6 +252,170 @@ function extractUrls(text: string) {
   );
 
   return Array.from(new Set(matches)).filter((url) => !isLikelySystemUrl(url));
+}
+
+function getHtmlAttribute(tag: string, attributeName: string) {
+  const match = tag.match(
+    new RegExp(`\\b${attributeName}\\s*=\\s*["']([^"']*)["']`, "i")
+  );
+
+  return match?.[1] ? decodeHtmlValue(match[1]) : "";
+}
+
+function getImageCandidatesFromHtml(html: string) {
+  const candidates: Array<{ url: string; context: string }> = [];
+
+  for (const match of html.matchAll(/<img\b[^>]*>/gi)) {
+    const tag = match[0];
+    const context = [
+      tag,
+      getHtmlAttribute(tag, "alt"),
+      getHtmlAttribute(tag, "title"),
+      getHtmlAttribute(tag, "aria-label")
+    ].join(" ");
+
+    for (const attributeName of ["src", "data-src", "data-original"]) {
+      const value = getHtmlAttribute(tag, attributeName);
+
+      if (value) {
+        candidates.push({ url: value, context });
+      }
+    }
+
+    const srcset = getHtmlAttribute(tag, "srcset");
+
+    if (srcset) {
+      for (const entry of srcset.split(",")) {
+        const url = entry.trim().split(/\s+/)[0];
+
+        if (url) {
+          candidates.push({ url, context });
+        }
+      }
+    }
+  }
+
+  for (const match of html.matchAll(/url\((["']?)(https?:\/\/[^)"']+)\1\)/gi)) {
+    candidates.push({ url: decodeHtmlValue(match[2]), context: match[0] });
+  }
+
+  for (const match of html.matchAll(htmlUrlPattern)) {
+    candidates.push({ url: decodeHtmlValue(match[0]), context: "" });
+  }
+
+  return candidates;
+}
+
+function normalizeImageUrl(value: string) {
+  const decodedValue = decodeHtmlValue(value);
+
+  try {
+    const url = new URL(cleanUrl(decodedValue));
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
+function isLikelyPropertyPhotoUrl(url: string, context: string) {
+  const normalizedContext = `${url} ${context}`.toLowerCase();
+
+  if (
+    /logo|icon|sprite|tracking|pixel|spacer|yard.?sign|home loans|mls logo|emailtrackingservice|\.woff2?\b/.test(
+      normalizedContext
+    )
+  ) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const pathname = parsedUrl.pathname.toLowerCase();
+
+    if (
+      hostname === "photos.zillowstatic.com" &&
+      pathname.startsWith("/fp/") &&
+      /\.(?:jpe?g|png|webp)$/.test(pathname) &&
+      !/-l_c\./.test(pathname)
+    ) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
+}
+
+function getPhotoDedupeKey(url: string) {
+  try {
+    const parsedUrl = new URL(url);
+    const zillowPhotoMatch = parsedUrl.pathname.match(/\/fp\/([a-z0-9]+)-/i);
+
+    if (zillowPhotoMatch?.[1]) {
+      return `${parsedUrl.hostname.toLowerCase()}:${zillowPhotoMatch[1]}`;
+    }
+
+    return `${parsedUrl.hostname.toLowerCase()}${parsedUrl.pathname}`;
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+function scorePhotoUrl(url: string) {
+  const sizeMatch = url.match(/_(\d{3,5})_(\d{3,5})\./);
+  const width = sizeMatch?.[1] ? Number.parseInt(sizeMatch[1], 10) : 0;
+  const height = sizeMatch?.[2] ? Number.parseInt(sizeMatch[2], 10) : 0;
+
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0) {
+    return width * height;
+  }
+
+  if (/-p_e\./i.test(url)) {
+    return 250_000;
+  }
+
+  return 1;
+}
+
+function extractPhotoUrlsFromHtml(html: string) {
+  if (!html.trim()) {
+    return [];
+  }
+
+  const photosByKey = new Map<
+    string,
+    { url: string; score: number; order: number }
+  >();
+  let order = 0;
+
+  for (const candidate of getImageCandidatesFromHtml(html)) {
+    const url = normalizeImageUrl(candidate.url);
+
+    if (!url || !isLikelyPropertyPhotoUrl(url, candidate.context)) {
+      continue;
+    }
+
+    const key = getPhotoDedupeKey(url);
+    const score = scorePhotoUrl(url);
+    const existing = photosByKey.get(key);
+
+    if (!existing) {
+      photosByKey.set(key, { url, score, order });
+      order += 1;
+      continue;
+    }
+
+    if (score > existing.score) {
+      photosByKey.set(key, { ...existing, url, score });
+    }
+  }
+
+  return Array.from(photosByKey.values())
+    .sort((a, b) => a.order - b.order)
+    .map((photo) => photo.url);
 }
 
 function getMeaningfulLines(text: string) {
@@ -568,6 +745,7 @@ function extractFacts(text: string, sourceReference: string, options: ParseOptio
 function estimateConfidence(candidate: Omit<ListingCandidateExtract, "confidence">) {
   const signals = [
     candidate.listingUrl,
+    candidate.primaryPhotoUrl,
     candidate.addressLine1,
     candidate.city,
     candidate.askingPrice,
@@ -584,7 +762,8 @@ function estimateConfidence(candidate: Omit<ListingCandidateExtract, "confidence
 
 function parseCandidateBlock(
   block: string,
-  options: ParseOptions
+  options: ParseOptions,
+  photoUrls: string[] = []
 ): ListingCandidateExtract | null {
   const normalizedBlock = normalizeText(block);
 
@@ -595,6 +774,7 @@ function parseCandidateBlock(
   const urls = extractUrls(normalizedBlock);
   const listingUrl = urls[0] ?? "";
   const address = extractAddress(normalizedBlock);
+  const normalizedPhotoUrls = Array.from(new Set(photoUrls.filter(Boolean)));
   const candidateWithoutConfidence = {
     listingUrl,
     mlsId: extractMlsId(normalizedBlock),
@@ -608,6 +788,8 @@ function parseCandidateBlock(
     livingSqft: extractLivingSqft(normalizedBlock),
     lotAcres: extractLotAcres(normalizedBlock),
     yearBuilt: extractYearBuilt(normalizedBlock),
+    primaryPhotoUrl: normalizedPhotoUrls[0] ?? "",
+    photoUrls: normalizedPhotoUrls,
     listingRemarks: summarizeRemarks(normalizedBlock),
     rawText: normalizedBlock,
     facts: extractFacts(normalizedBlock, listingUrl || "listing alert", options),
@@ -691,12 +873,19 @@ export function parseListingAlertText(input: string, options: ParseOptions = {})
   }
 
   const candidatesByKey = new Map<string, ListingCandidateExtract>();
+  const photoUrls = extractPhotoUrlsFromHtml(options.bodyHtml ?? "");
+  let photoIndex = 0;
 
   for (const block of splitCandidateBlocks(normalizedInput)) {
-    const candidate = parseCandidateBlock(block, options);
+    const candidatePhotoUrls = photoUrls[photoIndex] ? [photoUrls[photoIndex]] : [];
+    const candidate = parseCandidateBlock(block, options, candidatePhotoUrls);
 
     if (!candidate) {
       continue;
+    }
+
+    if (candidatePhotoUrls.length > 0) {
+      photoIndex += 1;
     }
 
     candidatesByKey.set(normalizeListingCandidateKey(candidate), candidate);
@@ -726,6 +915,8 @@ export function createPropertyDraftFromListingCandidate(
       postalCode: candidate.postalCode,
       listingUrl: candidate.listingUrl,
       mlsId: candidate.mlsId,
+      primaryPhotoUrl: candidate.primaryPhotoUrl,
+      photoUrls: candidate.photoUrls,
       askingPrice: candidate.askingPrice,
       listingStatus: "unknown",
       bedrooms: candidate.bedrooms,

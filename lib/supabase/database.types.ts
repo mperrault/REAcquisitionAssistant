@@ -172,6 +172,8 @@ export type Database = {
           longitude: number | null;
           listing_url: string;
           mls_id: string;
+          primary_photo_url: string;
+          photo_urls: Json;
           asking_price: number | null;
           estimated_purchase_price: number | null;
           listing_status:
@@ -224,6 +226,8 @@ export type Database = {
           longitude?: number | null;
           listing_url?: string;
           mls_id?: string;
+          primary_photo_url?: string;
+          photo_urls?: Json;
           asking_price?: number | null;
           estimated_purchase_price?: number | null;
           listing_status?:
@@ -440,6 +444,8 @@ export type Database = {
           city: string;
           state: string;
           postal_code: string;
+          primary_photo_url: string;
+          photo_urls: Json;
           asking_price: number | null;
           bedrooms: number | null;
           bathrooms: number | null;
@@ -468,6 +474,8 @@ export type Database = {
           city?: string;
           state?: string;
           postal_code?: string;
+          primary_photo_url?: string;
+          photo_urls?: Json;
           asking_price?: number | null;
           bedrooms?: number | null;
           bathrooms?: number | null;

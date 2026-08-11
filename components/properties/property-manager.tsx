@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import * as React from "react";
 import {
   BadgeDollarSign,
@@ -230,6 +231,7 @@ export function PropertyManager() {
       property.state,
       property.postalCode,
       property.mlsId,
+      property.primaryPhotoUrl,
       property.houseStyle,
       property.notes
     ]
@@ -463,7 +465,21 @@ export function PropertyManager() {
                   )}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                    {property.primaryPhotoUrl ? (
+                      <div className="relative h-14 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-secondary">
+                        <Image
+                          src={property.primaryPhotoUrl}
+                          alt={`${formatAddress(property)} listing photo`}
+                          fill
+                          sizes="64px"
+                          className="object-cover"
+                          loading="lazy"
+                          unoptimized
+                          referrerPolicy="no-referrer"
+                        />
+                      </div>
+                    ) : null}
+                    <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">
                         {formatAddress(property)}
                       </div>
@@ -687,8 +703,52 @@ function OverviewTab({
   draft: PropertyRecord;
   updateDraft: (patch: Partial<PropertyRecord>) => void;
 }) {
+  function updatePrimaryPhotoUrl(primaryPhotoUrl: string) {
+    updateDraft({
+      primaryPhotoUrl,
+      photoUrls: primaryPhotoUrl
+        ? Array.from(new Set([primaryPhotoUrl, ...draft.photoUrls]))
+        : draft.photoUrls.filter((photoUrl) => photoUrl !== draft.primaryPhotoUrl)
+    });
+  }
+
   return (
     <div className="grid gap-5">
+      <Section title="Listing Photo">
+        <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+          {draft.primaryPhotoUrl ? (
+            <div className="relative h-40 overflow-hidden rounded-md border border-border bg-secondary">
+              <Image
+                src={draft.primaryPhotoUrl}
+                alt={`${formatAddress(draft)} listing photo`}
+                fill
+                sizes="220px"
+                className="object-cover"
+                loading="lazy"
+                unoptimized
+                referrerPolicy="no-referrer"
+              />
+            </div>
+          ) : (
+            <div className="flex h-40 items-center justify-center rounded-md border border-dashed border-border bg-card text-sm text-muted-foreground">
+              No listing photo
+            </div>
+          )}
+          <div className="grid content-start gap-4">
+            <Field label="Primary Photo URL">
+              <Input
+                value={draft.primaryPhotoUrl}
+                onChange={(event) => updatePrimaryPhotoUrl(event.target.value)}
+              />
+            </Field>
+            <div className="text-sm text-muted-foreground">
+              {draft.photoUrls.length} saved photo
+              {draft.photoUrls.length === 1 ? "" : "s"}
+            </div>
+          </div>
+        </div>
+      </Section>
+
       <Section title="Address And Status">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Address" className="md:col-span-2">

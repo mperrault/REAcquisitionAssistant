@@ -46,6 +46,8 @@ export function createPropertyRecord(
     longitude: patch.longitude ?? null,
     listingUrl: patch.listingUrl ?? "",
     mlsId: patch.mlsId ?? "",
+    primaryPhotoUrl: patch.primaryPhotoUrl ?? "",
+    photoUrls: patch.photoUrls ?? [],
     askingPrice: patch.askingPrice ?? null,
     estimatedPurchasePrice: patch.estimatedPurchasePrice ?? null,
     listingStatus: patch.listingStatus ?? "unknown",

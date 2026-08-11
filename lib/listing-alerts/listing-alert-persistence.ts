@@ -266,7 +266,8 @@ export function ingestListingAlertText(
     .join("\n\n");
   const parseResult = parseListingAlertText(parserInput, {
     timestamp,
-    createId
+    createId,
+    bodyHtml: input.bodyHtml
   });
   const parsedCandidates = parseResult.candidates.map((candidate) =>
     createListingCandidate(sourceId, message, candidate, timestamp, createId)

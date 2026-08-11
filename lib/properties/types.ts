@@ -67,6 +67,8 @@ export const propertyRecordSchema = z.object({
   longitude: z.number().nullable(),
   listingUrl: z.string(),
   mlsId: z.string(),
+  primaryPhotoUrl: z.string().default(""),
+  photoUrls: z.array(z.string()).default([]),
   askingPrice: nullableIntegerSchema,
   estimatedPurchasePrice: nullableIntegerSchema,
   listingStatus: listingStatusSchema,
