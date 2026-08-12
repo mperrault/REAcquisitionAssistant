@@ -469,10 +469,20 @@ export function markListingCandidateIgnored(
   candidateId: string,
   timestamp = nowIso()
 ): ListingAlertState {
+  return markListingCandidatesIgnored(state, [candidateId], timestamp);
+}
+
+export function markListingCandidatesIgnored(
+  state: ListingAlertState,
+  candidateIds: string[],
+  timestamp = nowIso()
+): ListingAlertState {
+  const candidateIdSet = new Set(candidateIds);
+
   return listingAlertStateSchema.parse({
     ...state,
     candidates: state.candidates.map((candidate) =>
-      candidate.id === candidateId
+      candidateIdSet.has(candidate.id) && candidate.status !== "imported"
         ? {
             ...candidate,
             status: "ignored",

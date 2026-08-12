@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createPropertyDraftFromListingCandidate,
+  NO_PROPERTY_PHOTO_IN_HTML_WARNING,
   parseListingAlertText
 } from "@/lib/listing-alerts/listing-alert-parser";
 import {
@@ -15,9 +16,13 @@ import {
   ingestListingAlertText,
   LISTING_ALERT_STORAGE_KEY,
   loadListingAlertState,
+  markListingCandidatesIgnored,
   reprocessListingAlertMessages,
   upsertListingAlertSource
 } from "@/lib/listing-alerts/listing-alert-persistence";
+import {
+  filterAndSortListingCandidates
+} from "@/lib/listing-alerts/listing-alert-triage";
 import { quietCornerSeedProfile } from "@/lib/profiles/quiet-corner-seed";
 
 const timestamp = "2026-08-10T22:00:00.000Z";
@@ -64,6 +69,12 @@ const zillowDigestPhotoUrls = [
 ];
 const zillowMlsLogoUrl =
   "https://photos.zillowstatic.com/fp/d79c34cc3fb9c13a4cbe1437a108a1d7-l_c.jpg";
+const zillowEscapedJsonPhotoUrl =
+  "https://photos.zillowstatic.com/fp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-p_e.jpg";
+const zillowAshworthPhotoUrl =
+  "https://photos.zillowstatic.com/fp/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-p_e.jpg";
+const zillowJeromePhotoUrl =
+  "https://photos.zillowstatic.com/fp/cccccccccccccccccccccccccccccccc-p_e.jpg";
 
 const zillowInstantAlertText = `New Listing: 18 Fiske Hill Rd Sturbridge, MA 01566. Your 'For Sale near Stafford Springs CT 06076' search
 
@@ -236,6 +247,178 @@ describe("listing alert ingestion", () => {
     expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual(
       zillowDigestPhotoUrls
     );
+  });
+
+  it("extracts escaped Zillow photo URLs from alert HTML", () => {
+    const escapedPhotoUrl = zillowEscapedJsonPhotoUrl.replace(/\//g, "\\/");
+    const result = parseListingAlertText(zillowInstantAlertText, {
+      timestamp,
+      createId: deterministicIds("fact"),
+      bodyHtml: `<html><body><script>
+        {"address":"18 Fiske Hill Rd","imageUrl":"${escapedPhotoUrl}"}
+      </script></body></html>`
+    });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.primaryPhotoUrl).toBe(
+      zillowEscapedJsonPhotoUrl
+    );
+    expect(result.candidates[0]?.warnings).toEqual([]);
+  });
+
+  it("matches Zillow photos to candidates by nearby address context", () => {
+    const result = parseListingAlertText(
+      `Daily results straight to your inbox.
+
+For sale. NEW.
+$300,000
+3 bd | 1 ba | 1,232 sqft
+58 Ashworth Street, Manchester, CT 06040
+View this listing -
+${zillowRedirectUrl("33333333")}
+
+For sale. NEW.
+$430,000
+4 bd | 2 ba | 3,769 sqft
+12 Jerome Avenue, Bloomfield, CT 06002
+View this listing -
+${zillowRedirectUrl("44444444")}`,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <img src="${zillowJeromePhotoUrl}" alt="12 Jerome Avenue" />
+          <img src="${zillowAshworthPhotoUrl}" alt="58 Ashworth Street" />
+        </body></html>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates[0]?.addressLine1).toBe("58 Ashworth Street");
+    expect(result.candidates[0]?.primaryPhotoUrl).toBe(zillowAshworthPhotoUrl);
+    expect(result.candidates[1]?.addressLine1).toBe("12 Jerome Avenue");
+    expect(result.candidates[1]?.primaryPhotoUrl).toBe(zillowJeromePhotoUrl);
+  });
+
+  it("explains when alert HTML has no property photo URL", () => {
+    const result = parseListingAlertText(zillowInstantAlertText, {
+      timestamp,
+      createId: deterministicIds("fact"),
+      bodyHtml: `<html><body>
+        <img src="https://zillowstatic.com/s3/email-statics/images/zui/logo_zillow_lm.png" alt="Zillow" />
+      </body></html>`
+    });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.primaryPhotoUrl).toBe("");
+    expect(result.candidates[0]?.warnings).toContain(
+      NO_PROPERTY_PHOTO_IN_HTML_WARNING
+    );
+  });
+
+  it("filters and sorts listing candidates for queue triage", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-triage",
+        name: "Zillow Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const ingested = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-triage",
+        subject: "Daily digest",
+        from: "Zillow <instant-updates@mail.zillow.com>",
+        receivedAt: timestamp,
+        bodyText: zillowDigestAlertText,
+        bodyHtml: zillowDigestAlertHtml
+      },
+      timestamp,
+      deterministicIds("triage")
+    );
+    const photoCandidates = filterAndSortListingCandidates({
+      state: ingested.state,
+      selectedSourceId: source.id,
+      statusFilter: "new",
+      triageFilter: "has_photo",
+      sortMode: "price_asc",
+      activeProfile: null
+    });
+    const missingPhotoCandidates = filterAndSortListingCandidates({
+      state: ingested.state,
+      selectedSourceId: source.id,
+      statusFilter: "new",
+      triageFilter: "missing_photo",
+      sortMode: "received_desc",
+      activeProfile: null
+    });
+    const scoredCandidates = filterAndSortListingCandidates({
+      state: ingested.state,
+      selectedSourceId: source.id,
+      statusFilter: "new",
+      triageFilter: "all",
+      sortMode: "score_desc",
+      activeProfile: quietCornerSeedProfile
+    });
+
+    expect(photoCandidates.candidates.map((candidate) => candidate.addressLine1))
+      .toEqual(["50 Phelps St", "289 Morgan St"]);
+    expect(missingPhotoCandidates.candidates).toHaveLength(0);
+    expect(scoredCandidates.scorePreviews.size).toBe(2);
+    expect(
+      scoredCandidates.candidates.every((candidate) =>
+        scoredCandidates.scorePreviews.has(candidate.id)
+      )
+    ).toBe(true);
+  });
+
+  it("marks multiple visible candidates ignored in one state update", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-batch-ignore",
+        name: "Zillow Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const ingested = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-batch-ignore",
+        subject: "Daily digest",
+        from: "Zillow <instant-updates@mail.zillow.com>",
+        receivedAt: timestamp,
+        bodyText: zillowDigestAlertText,
+        bodyHtml: zillowDigestAlertHtml
+      },
+      timestamp,
+      deterministicIds("batch-ignore")
+    );
+    const ignored = markListingCandidatesIgnored(
+      ingested.state,
+      ingested.state.candidates.map((candidate) => candidate.id),
+      timestamp
+    );
+
+    expect(ignored.candidates).toHaveLength(2);
+    expect(ignored.candidates.map((candidate) => candidate.status)).toEqual([
+      "ignored",
+      "ignored"
+    ]);
   });
 
   it("creates an editable property draft without manually entering fields", () => {

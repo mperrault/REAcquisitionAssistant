@@ -24,7 +24,10 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  createPropertyDraftFromListingCandidate
+  createPropertyDraftFromListingCandidate,
+  NO_EMAIL_HTML_PHOTO_WARNING,
+  NO_MATCHING_PROPERTY_PHOTO_WARNING,
+  NO_PROPERTY_PHOTO_IN_HTML_WARNING
 } from "@/lib/listing-alerts/listing-alert-parser";
 import {
   applyListingCandidateGeographyFilter,
@@ -37,6 +40,7 @@ import {
   ingestListingAlertText,
   loadListingAlertState,
   markListingAlertSourceChecked,
+  markListingCandidatesIgnored,
   markListingCandidateIgnored,
   markListingCandidateImported,
   reprocessListingAlertMessages,
@@ -53,6 +57,13 @@ import type {
   ListingCandidate,
   ListingCandidateStatus
 } from "@/lib/listing-alerts/types";
+import {
+  type CandidateSortMode,
+  type CandidateTriageFilter,
+  type CandidateScorePreview,
+  filterAndSortListingCandidates,
+  LOW_CONFIDENCE_THRESHOLD
+} from "@/lib/listing-alerts/listing-alert-triage";
 import { listingAlertPollResponseSchema } from "@/lib/listing-alerts/polling-types";
 import {
   createEmptyPropertyState,
@@ -117,6 +128,31 @@ const statusOptions: Array<{ value: ListingCandidateStatus | "all"; label: strin
     { value: "imported", label: "Imported" },
     { value: "ignored", label: "Ignored" }
   ];
+
+const triageOptions: Array<{ value: CandidateTriageFilter; label: string }> = [
+  { value: "all", label: "All Triage" },
+  { value: "needs_review", label: "Needs Review" },
+  { value: "has_photo", label: "Has Photo" },
+  { value: "missing_photo", label: "Missing Photo" },
+  {
+    value: "low_confidence",
+    label: `Low Confidence <${Math.round(LOW_CONFIDENCE_THRESHOLD * 100)}%`
+  },
+  { value: "warnings", label: "Warnings" },
+  { value: "outside_geography", label: "Outside Geography" },
+  { value: "strong_score", label: "Strong Score" },
+  { value: "rejected_by_profile", label: "Rejected by Profile" }
+];
+
+const sortOptions: Array<{ value: CandidateSortMode; label: string }> = [
+  { value: "received_desc", label: "Newest Email" },
+  { value: "updated_desc", label: "Recently Updated" },
+  { value: "score_desc", label: "Best Score" },
+  { value: "confidence_desc", label: "Best Parsed" },
+  { value: "confidence_asc", label: "Worst Parsed" },
+  { value: "price_asc", label: "Lowest Price" },
+  { value: "price_desc", label: "Highest Price" }
+];
 
 function formatCurrency(value: number | null) {
   if (value === null) {
@@ -257,6 +293,66 @@ function getCandidateProvenance(
   };
 }
 
+function getMissingPhotoReason(candidate: ListingCandidate) {
+  return (
+    candidate.warnings.find((warning) =>
+      [
+        NO_EMAIL_HTML_PHOTO_WARNING,
+        NO_PROPERTY_PHOTO_IN_HTML_WARNING,
+        NO_MATCHING_PROPERTY_PHOTO_WARNING
+      ].includes(warning)
+    ) ?? "No photo in alert"
+  );
+}
+
+function getMissingPhotoLabel(reason: string) {
+  if (reason === NO_EMAIL_HTML_PHOTO_WARNING) {
+    return "No email HTML";
+  }
+
+  if (reason === NO_PROPERTY_PHOTO_IN_HTML_WARNING) {
+    return "No photo URL";
+  }
+
+  if (reason === NO_MATCHING_PROPERTY_PHOTO_WARNING) {
+    return "No matching photo";
+  }
+
+  return "No photo in alert";
+}
+
+function getScorePreviewVariant(scorePreview: CandidateScorePreview | undefined) {
+  if (!scorePreview) {
+    return "outline" as const;
+  }
+
+  if (scorePreview.evaluation.hardRejected) {
+    return "destructive" as const;
+  }
+
+  if (scorePreview.evaluation.normalizedScore >= 70) {
+    return "success" as const;
+  }
+
+  if (scorePreview.evaluation.normalizedScore >= 45) {
+    return "secondary" as const;
+  }
+
+  return "warning" as const;
+}
+
+function getScorePreviewLabel(scorePreview: CandidateScorePreview | undefined) {
+  if (!scorePreview) {
+    return "No score";
+  }
+
+  if (scorePreview.evaluation.hardRejected) {
+    return "Rejected";
+  }
+
+  return `Score ${scorePreview.evaluation.normalizedScore}`;
+}
+
 function createDefaultSource() {
   return createListingAlertSource({
     name: "Saved Search Alerts",
@@ -306,6 +402,10 @@ export function ListingAlertManager() {
   const [candidateStatusFilter, setCandidateStatusFilter] = React.useState<
     ListingCandidateStatus | "all"
   >("new");
+  const [candidateTriageFilter, setCandidateTriageFilter] =
+    React.useState<CandidateTriageFilter>("all");
+  const [candidateSortMode, setCandidateSortMode] =
+    React.useState<CandidateSortMode>("received_desc");
   const [alertText, setAlertText] = React.useState(sampleAlertText);
   const [isPolling, setIsPolling] = React.useState(false);
   const [loadSource, setLoadSource] = React.useState<"storage" | "empty" | "reset">(
@@ -386,15 +486,34 @@ export function ListingAlertManager() {
     );
   }, [listingState.candidates]);
 
-  const filteredCandidates = listingState.candidates.filter((candidate) => {
-    const matchesStatus =
-      candidateStatusFilter === "all" ||
-      candidate.status === candidateStatusFilter;
-    const matchesSource =
-      !selectedSourceId || candidate.sourceId === selectedSourceId;
-
-    return matchesStatus && matchesSource;
-  });
+  const triageResult = React.useMemo(
+    () =>
+      filterAndSortListingCandidates({
+        state: listingState,
+        selectedSourceId,
+        statusFilter: candidateStatusFilter,
+        triageFilter: candidateTriageFilter,
+        sortMode: candidateSortMode,
+        activeProfile
+      }),
+    [
+      activeProfile,
+      candidateSortMode,
+      candidateStatusFilter,
+      candidateTriageFilter,
+      listingState,
+      selectedSourceId
+    ]
+  );
+  const filteredCandidates = triageResult.candidates;
+  const scorePreviews = triageResult.scorePreviews;
+  const visibleNewCandidateIds = React.useMemo(
+    () =>
+      filteredCandidates
+        .filter((candidate) => candidate.status === "new")
+        .map((candidate) => candidate.id),
+    [filteredCandidates]
+  );
 
   const latestRun = listingState.runs[0] ?? null;
   const selectedSourceMessageCount = React.useMemo(() => {
@@ -681,6 +800,23 @@ export function ListingAlertManager() {
       candidateId
     );
     persistListingState(nextListingState, "Candidate ignored");
+  }
+
+  function handleIgnoreVisibleCandidates() {
+    if (visibleNewCandidateIds.length === 0) {
+      return;
+    }
+
+    const nextListingState = markListingCandidatesIgnored(
+      listingState,
+      visibleNewCandidateIds
+    );
+    persistListingState(
+      nextListingState,
+      `${visibleNewCandidateIds.length} visible candidate${
+        visibleNewCandidateIds.length === 1 ? "" : "s"
+      } ignored`
+    );
   }
 
   return (
@@ -989,9 +1125,22 @@ export function ListingAlertManager() {
                   <Badge variant="outline">
                     {candidateCounts.ignored ?? 0} ignored
                   </Badge>
+                  <Badge variant="outline">
+                    {filteredCandidates.length} visible
+                  </Badge>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center justify-start gap-2 lg:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleIgnoreVisibleCandidates}
+                  disabled={visibleNewCandidateIds.length === 0}
+                >
+                  <XCircle aria-hidden="true" />
+                  Ignore Visible
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
@@ -1007,7 +1156,7 @@ export function ListingAlertManager() {
                   Clear Queue
                 </Button>
                 <Select
-                  className="w-44"
+                  className="w-40"
                   value={candidateStatusFilter}
                   onChange={(event) =>
                     setCandidateStatusFilter(
@@ -1021,6 +1170,34 @@ export function ListingAlertManager() {
                     </option>
                   ))}
                 </Select>
+                <Select
+                  className="w-44"
+                  value={candidateTriageFilter}
+                  onChange={(event) =>
+                    setCandidateTriageFilter(
+                      event.target.value as CandidateTriageFilter
+                    )
+                  }
+                >
+                  {triageOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  className="w-40"
+                  value={candidateSortMode}
+                  onChange={(event) =>
+                    setCandidateSortMode(event.target.value as CandidateSortMode)
+                  }
+                >
+                  {sortOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
               </div>
             </div>
           </div>
@@ -1028,11 +1205,16 @@ export function ListingAlertManager() {
           <div className="grid gap-0 divide-y divide-border">
             {filteredCandidates.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-foreground">
-                No candidates match the current source and status filter.
+                No candidates match the current source, status, and triage
+                filters.
               </div>
             ) : (
               filteredCandidates.map((candidate) => {
                 const provenance = getCandidateProvenance(candidate, listingState);
+                const missingPhotoReason = getMissingPhotoReason(candidate);
+                const missingPhotoLabel =
+                  getMissingPhotoLabel(missingPhotoReason);
+                const scorePreview = scorePreviews.get(candidate.id);
 
                 return (
                   <article key={candidate.id} className="p-4 sm:p-5">
@@ -1052,9 +1234,12 @@ export function ListingAlertManager() {
                             />
                           </div>
                         ) : (
-                          <div className="flex h-32 w-full shrink-0 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-secondary text-center text-xs font-medium text-muted-foreground sm:h-28 sm:w-40">
+                          <div
+                            className="flex h-32 w-full shrink-0 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-secondary px-3 text-center text-xs font-medium text-muted-foreground sm:h-28 sm:w-40"
+                            title={missingPhotoReason}
+                          >
                             <ImageOff aria-hidden="true" className="size-5" />
-                            <span>No photo in alert</span>
+                            <span>{missingPhotoLabel}</span>
                           </div>
                         )}
                         <div className="min-w-0 flex-1">
@@ -1070,13 +1255,18 @@ export function ListingAlertManager() {
                             <Badge variant="outline">
                               {Math.round(candidate.confidence * 100)}% parsed
                             </Badge>
+                            {activeProfile ? (
+                              <Badge variant={getScorePreviewVariant(scorePreview)}>
+                                {getScorePreviewLabel(scorePreview)}
+                              </Badge>
+                            ) : null}
                             <Badge variant="outline">{provenance.label}</Badge>
                             {candidate.primaryPhotoUrl ? (
                               <Badge variant="outline">
                                 {candidate.photoUrls.length || 1} photo
                               </Badge>
                             ) : (
-                              <Badge variant="warning">No photo in alert</Badge>
+                              <Badge variant="warning">{missingPhotoLabel}</Badge>
                             )}
                           </div>
                           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -1089,6 +1279,9 @@ export function ListingAlertManager() {
                               <span className="block max-w-[28rem] truncate">
                                 {provenance.messageSubject}
                               </span>
+                            ) : null}
+                            {scorePreview ? (
+                              <span>{scorePreview.evaluation.scoreLabel}</span>
                             ) : null}
                           </div>
                           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
@@ -1112,6 +1305,19 @@ export function ListingAlertManager() {
                             {candidate.listingRemarks || candidate.rawText}
                           </p>
                           <div className="mt-3 flex flex-wrap gap-2">
+                            {scorePreview?.evaluation.hardRejectReasons
+                              .slice(0, 1)
+                              .map((reason) => (
+                                <Badge key={reason.ruleKey} variant="destructive">
+                                  Reject: {reason.label}
+                                </Badge>
+                              ))}
+                            {scorePreview &&
+                            scorePreview.evaluation.missingData.length > 0 ? (
+                              <Badge variant="warning">
+                                {scorePreview.evaluation.missingData.length} missing
+                              </Badge>
+                            ) : null}
                             {candidate.facts.slice(0, 6).map((fact) => (
                               <Badge key={fact.id} variant="outline">
                                 {fact.label}

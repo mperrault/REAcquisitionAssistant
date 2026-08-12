@@ -21,6 +21,22 @@ type FeaturePattern = {
   confidence: number;
 };
 
+type ExtractedPhotoCandidate = {
+  url: string;
+  context: string;
+  contextPriority: number;
+  key: string;
+  score: number;
+  order: number;
+};
+
+export const NO_EMAIL_HTML_PHOTO_WARNING =
+  "No email HTML available for photo extraction.";
+export const NO_PROPERTY_PHOTO_IN_HTML_WARNING =
+  "No property photo URL found in alert HTML.";
+export const NO_MATCHING_PROPERTY_PHOTO_WARNING =
+  "No matching property photo found for this candidate.";
+
 const urlPattern = /https?:\/\/[^\s<>"')]+/gi;
 const htmlUrlPattern = /https?:\/\/[^\s"'<>\\)]+/gi;
 const streetNumberPatternSource = String.raw`\d{1,6}(?:-\d{1,6})?`;
@@ -191,6 +207,16 @@ function decodeHtmlValue(value: string) {
     .trim();
 }
 
+function decodeEscapedHtmlValue(value: string) {
+  return decodeHtmlValue(value)
+    .replace(/\\u003a/gi, ":")
+    .replace(/\\u002f/gi, "/")
+    .replace(/\\u003f/gi, "?")
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\u003d/gi, "=")
+    .replace(/\\\//g, "/");
+}
+
 function defaultCreateId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -255,59 +281,116 @@ function extractUrls(text: string) {
 }
 
 function getHtmlAttribute(tag: string, attributeName: string) {
-  const match = tag.match(
-    new RegExp(`\\b${attributeName}\\s*=\\s*["']([^"']*)["']`, "i")
+  const escapedAttributeName = attributeName.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
+  const quotedMatch = tag.match(
+    new RegExp(`\\b${escapedAttributeName}\\s*=\\s*(["'])(.*?)\\1`, "i")
   );
 
-  return match?.[1] ? decodeHtmlValue(match[1]) : "";
+  if (quotedMatch?.[2]) {
+    return decodeHtmlValue(quotedMatch[2]);
+  }
+
+  const unquotedMatch = tag.match(
+    new RegExp(`\\b${escapedAttributeName}\\s*=\\s*([^\\s>]+)`, "i")
+  );
+
+  return unquotedMatch?.[1] ? decodeHtmlValue(unquotedMatch[1]) : "";
+}
+
+function getHtmlSearchVariants(html: string) {
+  return Array.from(
+    new Set([html, decodeHtmlValue(html), decodeEscapedHtmlValue(html)])
+  ).filter((variant) => variant.trim());
 }
 
 function getImageCandidatesFromHtml(html: string) {
-  const candidates: Array<{ url: string; context: string }> = [];
+  const candidates: Array<{
+    url: string;
+    context: string;
+    contextPriority: number;
+  }> = [];
 
-  for (const match of html.matchAll(/<img\b[^>]*>/gi)) {
-    const tag = match[0];
-    const context = [
-      tag,
-      getHtmlAttribute(tag, "alt"),
-      getHtmlAttribute(tag, "title"),
-      getHtmlAttribute(tag, "aria-label")
-    ].join(" ");
+  for (const htmlVariant of getHtmlSearchVariants(html)) {
+    for (const match of htmlVariant.matchAll(/<img\b[^>]*>/gi)) {
+      const tag = match[0];
+      const context = [
+        tag,
+        getHtmlAttribute(tag, "alt"),
+        getHtmlAttribute(tag, "title"),
+        getHtmlAttribute(tag, "aria-label")
+      ].join(" ");
 
-    for (const attributeName of ["src", "data-src", "data-original"]) {
-      const value = getHtmlAttribute(tag, attributeName);
+      for (const attributeName of [
+        "src",
+        "data-src",
+        "data-original",
+        "data-lazy-src",
+        "data-image",
+        "data-img-url"
+      ]) {
+        const value = getHtmlAttribute(tag, attributeName);
 
-      if (value) {
-        candidates.push({ url: value, context });
+        if (value) {
+          candidates.push({ url: value, context, contextPriority: 3 });
+        }
       }
-    }
 
-    const srcset = getHtmlAttribute(tag, "srcset");
+      for (const srcsetAttributeName of ["srcset", "data-srcset"]) {
+        const srcset = getHtmlAttribute(tag, srcsetAttributeName);
 
-    if (srcset) {
-      for (const entry of srcset.split(",")) {
-        const url = entry.trim().split(/\s+/)[0];
+        if (!srcset) {
+          continue;
+        }
 
-        if (url) {
-          candidates.push({ url, context });
+        for (const entry of srcset.split(",")) {
+          const url = entry.trim().split(/\s+/)[0];
+
+          if (url) {
+            candidates.push({ url, context, contextPriority: 3 });
+          }
         }
       }
     }
-  }
 
-  for (const match of html.matchAll(/url\((["']?)(https?:\/\/[^)"']+)\1\)/gi)) {
-    candidates.push({ url: decodeHtmlValue(match[2]), context: match[0] });
-  }
+    for (const match of htmlVariant.matchAll(
+      /url\((["']?)(https?:\/\/[^)"']+)\1\)/gi
+    )) {
+      const index = match.index ?? 0;
+      const context = htmlVariant.slice(
+        Math.max(0, index - 500),
+        Math.min(htmlVariant.length, index + match[0].length + 500)
+      );
 
-  for (const match of html.matchAll(htmlUrlPattern)) {
-    candidates.push({ url: decodeHtmlValue(match[0]), context: "" });
+      candidates.push({
+        url: decodeHtmlValue(match[2]),
+        context,
+        contextPriority: 2
+      });
+    }
+
+    for (const match of htmlVariant.matchAll(htmlUrlPattern)) {
+      const index = match.index ?? 0;
+      const context = htmlVariant.slice(
+        Math.max(0, index - 500),
+        Math.min(htmlVariant.length, index + match[0].length + 500)
+      );
+
+      candidates.push({
+        url: decodeHtmlValue(match[0]),
+        context,
+        contextPriority: 1
+      });
+    }
   }
 
   return candidates;
 }
 
 function normalizeImageUrl(value: string) {
-  const decodedValue = decodeHtmlValue(value);
+  const decodedValue = decodeEscapedHtmlValue(value);
 
   try {
     const url = new URL(cleanUrl(decodedValue));
@@ -319,23 +402,13 @@ function normalizeImageUrl(value: string) {
 }
 
 function isLikelyPropertyPhotoUrl(url: string, context: string) {
-  const normalizedContext = `${url} ${context}`.toLowerCase();
-
-  if (
-    /logo|icon|sprite|tracking|pixel|spacer|yard.?sign|home loans|mls logo|emailtrackingservice|\.woff2?\b/.test(
-      normalizedContext
-    )
-  ) {
-    return false;
-  }
-
   try {
     const parsedUrl = new URL(url);
     const hostname = parsedUrl.hostname.toLowerCase();
     const pathname = parsedUrl.pathname.toLowerCase();
 
     if (
-      hostname === "photos.zillowstatic.com" &&
+      hostname.endsWith("zillowstatic.com") &&
       pathname.startsWith("/fp/") &&
       /\.(?:jpe?g|png|webp)$/.test(pathname) &&
       !/-l_c\./.test(pathname)
@@ -343,6 +416,16 @@ function isLikelyPropertyPhotoUrl(url: string, context: string) {
       return true;
     }
   } catch {
+    return false;
+  }
+
+  const normalizedContext = `${url} ${context}`.toLowerCase();
+
+  if (
+    /logo|icon|sprite|tracking|pixel|spacer|yard.?sign|home loans|mls logo|emailtrackingservice|\.woff2?\b/.test(
+      normalizedContext
+    )
+  ) {
     return false;
   }
 
@@ -380,15 +463,12 @@ function scorePhotoUrl(url: string) {
   return 1;
 }
 
-function extractPhotoUrlsFromHtml(html: string) {
+function extractPhotoCandidatesFromHtml(html: string) {
   if (!html.trim()) {
     return [];
   }
 
-  const photosByKey = new Map<
-    string,
-    { url: string; score: number; order: number }
-  >();
+  const photosByKey = new Map<string, ExtractedPhotoCandidate>();
   let order = 0;
 
   for (const candidate of getImageCandidatesFromHtml(html)) {
@@ -403,7 +483,14 @@ function extractPhotoUrlsFromHtml(html: string) {
     const existing = photosByKey.get(key);
 
     if (!existing) {
-      photosByKey.set(key, { url, score, order });
+      photosByKey.set(key, {
+        url,
+        context: candidate.context,
+        contextPriority: candidate.contextPriority,
+        key,
+        score,
+        order
+      });
       order += 1;
       continue;
     }
@@ -411,11 +498,119 @@ function extractPhotoUrlsFromHtml(html: string) {
     if (score > existing.score) {
       photosByKey.set(key, { ...existing, url, score });
     }
+
+    if (candidate.contextPriority > existing.contextPriority) {
+      photosByKey.set(key, {
+        ...(photosByKey.get(key) ?? existing),
+        context: candidate.context,
+        contextPriority: candidate.contextPriority
+      });
+    } else if (candidate.contextPriority === existing.contextPriority) {
+      photosByKey.set(key, {
+        ...(photosByKey.get(key) ?? existing),
+        context: `${existing.context} ${candidate.context}`
+      });
+    } else {
+      photosByKey.set(key, photosByKey.get(key) ?? existing);
+    }
   }
 
   return Array.from(photosByKey.values())
-    .sort((a, b) => a.order - b.order)
-    .map((photo) => photo.url);
+    .sort((a, b) => a.order - b.order);
+}
+
+function normalizeComparableText(value: string) {
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function scorePhotoBlockMatch(
+  block: string,
+  address: ReturnType<typeof extractAddress>,
+  photo: ExtractedPhotoCandidate
+) {
+  const normalizedBlock = normalizeComparableText(block);
+  const normalizedContext = normalizeComparableText(photo.context);
+  const addressLine = normalizeComparableText(address.addressLine1);
+  const fullAddress = normalizeComparableText(
+    [address.addressLine1, address.city, address.state, address.postalCode]
+      .filter(Boolean)
+      .join(" ")
+  );
+  const cityState = normalizeComparableText(
+    [address.city, address.state].filter(Boolean).join(" ")
+  );
+  let score = 0;
+
+  if (fullAddress && normalizedContext.includes(fullAddress)) {
+    score += 100;
+  }
+
+  if (addressLine && normalizedContext.includes(addressLine)) {
+    score += 70;
+  }
+
+  if (
+    addressLine &&
+    normalizedBlock.includes(addressLine) &&
+    normalizedContext.includes(addressLine)
+  ) {
+    score += 30;
+  }
+
+  if (cityState && normalizedContext.includes(cityState)) {
+    score += 15;
+  }
+
+  if (address.postalCode && normalizedContext.includes(address.postalCode)) {
+    score += 10;
+  }
+
+  return score;
+}
+
+function selectPhotosForBlock(
+  block: string,
+  photoCandidates: ExtractedPhotoCandidate[],
+  usedPhotoKeys: Set<string>
+) {
+  const normalizedBlock = normalizeText(block);
+  const address = extractAddress(normalizedBlock);
+  const scoredMatches = photoCandidates
+    .filter((photo) => !usedPhotoKeys.has(photo.key))
+    .map((photo) => ({
+      photo,
+      score: scorePhotoBlockMatch(normalizedBlock, address, photo)
+    }))
+    .filter((match) => match.score > 0)
+    .sort((a, b) => b.score - a.score || a.photo.order - b.photo.order);
+
+  return scoredMatches.length > 0
+    ? [scoredMatches[0].photo]
+    : photoCandidates
+        .filter((photo) => !usedPhotoKeys.has(photo.key))
+        .slice(0, 1);
+}
+
+function getMissingPhotoWarning(
+  bodyHtml: string | undefined,
+  photoCandidates: ExtractedPhotoCandidate[]
+) {
+  if (typeof bodyHtml !== "string") {
+    return "";
+  }
+
+  if (!bodyHtml.trim()) {
+    return NO_EMAIL_HTML_PHOTO_WARNING;
+  }
+
+  if (photoCandidates.length === 0) {
+    return NO_PROPERTY_PHOTO_IN_HTML_WARNING;
+  }
+
+  return NO_MATCHING_PROPERTY_PHOTO_WARNING;
 }
 
 function getMeaningfulLines(text: string) {
@@ -873,19 +1068,38 @@ export function parseListingAlertText(input: string, options: ParseOptions = {})
   }
 
   const candidatesByKey = new Map<string, ListingCandidateExtract>();
-  const photoUrls = extractPhotoUrlsFromHtml(options.bodyHtml ?? "");
-  let photoIndex = 0;
+  const photoCandidates = extractPhotoCandidatesFromHtml(options.bodyHtml ?? "");
+  const usedPhotoKeys = new Set<string>();
 
   for (const block of splitCandidateBlocks(normalizedInput)) {
-    const candidatePhotoUrls = photoUrls[photoIndex] ? [photoUrls[photoIndex]] : [];
+    const candidatePhotos = selectPhotosForBlock(
+      block,
+      photoCandidates,
+      usedPhotoKeys
+    );
+    const candidatePhotoUrls = candidatePhotos.map((photo) => photo.url);
     const candidate = parseCandidateBlock(block, options, candidatePhotoUrls);
 
     if (!candidate) {
       continue;
     }
 
-    if (candidatePhotoUrls.length > 0) {
-      photoIndex += 1;
+    for (const photo of candidatePhotos) {
+      usedPhotoKeys.add(photo.key);
+    }
+
+    if (!candidate.primaryPhotoUrl) {
+      const missingPhotoWarning = getMissingPhotoWarning(
+        options.bodyHtml,
+        photoCandidates
+      );
+
+      if (
+        missingPhotoWarning &&
+        !candidate.warnings.includes(missingPhotoWarning)
+      ) {
+        candidate.warnings.push(missingPhotoWarning);
+      }
     }
 
     candidatesByKey.set(normalizeListingCandidateKey(candidate), candidate);
