@@ -4,7 +4,10 @@ import {
   profileStateSchema,
   searchProfileSchema
 } from "@/lib/profiles/types";
-import { quietCornerSeedProfile } from "@/lib/profiles/quiet-corner-seed";
+import {
+  quietCornerSeedProfile,
+  quietCornerSeedProfiles
+} from "@/lib/profiles/quiet-corner-seed";
 
 export const PROFILE_STORAGE_KEY = "re-acquisition-assistant.profiles.v1";
 
@@ -28,12 +31,13 @@ function cloneProfile(profile: SearchProfile): SearchProfile {
 }
 
 export function createDefaultProfileState(): ProfileState {
-  const profile = cloneProfile(quietCornerSeedProfile);
+  const profiles = quietCornerSeedProfiles.map((profile) => cloneProfile(profile));
+  const activeProfile = profiles.find((profile) => profile.isActive) ?? profiles[0];
 
   return {
     schemaVersion: 1,
-    activeProfileId: profile.id,
-    profiles: [profile]
+    activeProfileId: activeProfile?.id ?? null,
+    profiles
   };
 }
 
@@ -58,7 +62,7 @@ export function loadProfileState(storage: StorageLike): LoadProfileStateResult {
     }
 
     return {
-      state: normalizeActiveProfile(parsed),
+      state: normalizeActiveProfile(reconcileSeedProfiles(parsed)),
       source: "storage"
     };
   } catch {
@@ -205,5 +209,40 @@ function normalizeActiveProfile(state: ProfileState): ProfileState {
       ...profile,
       isActive: profile.id === activeProfileId && !profile.isArchived
     }))
+  };
+}
+
+function reconcileSeedProfiles(state: ProfileState): ProfileState {
+  const existingProfileIds = new Set(state.profiles.map((profile) => profile.id));
+  let renamedSeedProfile = false;
+  const reconciledProfiles = state.profiles.map((profile) => {
+    if (
+      profile.id === quietCornerSeedProfile.id &&
+      profile.name === "Quiet Corner Second Home"
+    ) {
+      renamedSeedProfile = true;
+
+      return {
+        ...profile,
+        name: quietCornerSeedProfile.name
+      };
+    }
+
+    return profile;
+  });
+  const missingSeedProfiles = quietCornerSeedProfiles
+    .filter((profile) => !existingProfileIds.has(profile.id))
+    .map((profile) => ({
+      ...cloneProfile(profile),
+      isActive: false
+    }));
+
+  if (missingSeedProfiles.length === 0 && !renamedSeedProfile) {
+    return state;
+  }
+
+  return {
+    ...state,
+    profiles: [...reconciledProfiles, ...missingSeedProfiles]
   };
 }

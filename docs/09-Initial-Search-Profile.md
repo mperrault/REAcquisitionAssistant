@@ -1,14 +1,33 @@
-# Initial Search Profile — Quiet Corner Second Home
+# Initial Search Profiles — Quiet Corner Second Home
 
 This file is seed configuration, not application code.
 
 ## Profile
 
-Name: Quiet Corner Second Home
+Name: Quiet Corner Second Home Rehab
 
 Strategy:
 
 Acquire a dated or cosmetically unattractive home on an exceptional property, then complete a moderate renovation. Prioritize scarce setting/resale attributes over current interior finishes.
+
+## Variant Profile
+
+Name: Quiet Corner Turnkey
+
+Strategy:
+
+Acquire a move-in-ready Quiet Corner second home with the same geography, setting, style, and hard-reject preferences, but avoid properties that require meaningful renovation.
+
+Budget differences:
+
+- renovation budget target: $7,500
+- renovation budget max: $15,000
+- total-project target: $400,000
+- total-project max: $450,000
+
+Renovation interpretation:
+
+The Turnkey profile treats paint, lighting, landscaping, and very light flooring as acceptable refresh work. Kitchen, bathroom, layout, systems, siding, windows, structural, and addition work are penalties rather than desired renovation fit.
 
 ## Geography
 

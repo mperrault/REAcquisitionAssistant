@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PROFILE_STORAGE_KEY,
   archiveProfile,
   createDefaultProfileState,
   duplicateProfile,
@@ -43,18 +44,76 @@ function firstProfile(state: ProfileState) {
 }
 
 describe("profile persistence", () => {
-  it("seeds the initial Quiet Corner profile when storage is empty", () => {
+  it("seeds the initial Quiet Corner profiles when storage is empty", () => {
     const storage = new MemoryStorage();
     const result = loadProfileState(storage);
     const profile = firstProfile(result.state);
+    const turnkeyProfile = result.state.profiles.find(
+      (item) => item.id === "seed-quiet-corner-turnkey"
+    );
 
     expect(result.source).toBe("seed");
-    expect(profile.name).toBe("Quiet Corner Second Home");
+    expect(result.state.profiles).toHaveLength(2);
+    expect(profile.name).toBe("Quiet Corner Second Home Rehab");
     expect(profile.isActive).toBe(true);
     expect(profile.townPreferences).toHaveLength(14);
     expect(profile.featurePreferences.length).toBeGreaterThan(30);
     expect(profile.categoryWeights).toHaveLength(8);
     expect(profile.scoreThresholds).toHaveLength(5);
+    expect(turnkeyProfile).toMatchObject({
+      name: "Quiet Corner Turnkey",
+      isActive: false,
+      renovationTolerance: "turnkey_minimal_refresh",
+      budget: {
+        renovationBudgetMax: 15000,
+        totalProjectBudgetTarget: 400000,
+        totalProjectBudgetMax: 450000
+      }
+    });
+  });
+
+  it("reconciles stored seed profiles without wiping user edits", () => {
+    const storage = new MemoryStorage();
+    const oldSeed = cloneProfile(firstProfile(createDefaultProfileState()));
+    const editedProfile = {
+      ...oldSeed,
+      name: "Quiet Corner Second Home",
+      budget: {
+        ...oldSeed.budget,
+        totalProjectBudgetTarget: 425000
+      }
+    };
+
+    storage.setItem(
+      PROFILE_STORAGE_KEY,
+      JSON.stringify({
+        schemaVersion: 1,
+        activeProfileId: editedProfile.id,
+        profiles: [editedProfile]
+      })
+    );
+
+    const result = loadProfileState(storage);
+    const rehabProfile = result.state.profiles.find(
+      (profile) => profile.id === oldSeed.id
+    );
+    const turnkeyProfile = result.state.profiles.find(
+      (profile) => profile.id === "seed-quiet-corner-turnkey"
+    );
+
+    expect(result.source).toBe("storage");
+    expect(result.state.profiles).toHaveLength(2);
+    expect(rehabProfile).toMatchObject({
+      name: "Quiet Corner Second Home Rehab",
+      budget: {
+        totalProjectBudgetTarget: 425000
+      },
+      isActive: true
+    });
+    expect(turnkeyProfile).toMatchObject({
+      name: "Quiet Corner Turnkey",
+      isActive: false
+    });
   });
 
   it("persists edits across every seeded preference area", () => {
@@ -126,7 +185,7 @@ describe("profile persistence", () => {
       "2026-08-10T19:05:00.000Z"
     );
 
-    expect(activated.profiles).toHaveLength(2);
+    expect(activated.profiles).toHaveLength(3);
     expect(activated.activeProfileId).toBe("profile-copy");
     expect(activated.profiles.filter((profile) => profile.isActive)).toHaveLength(1);
     expect(
@@ -148,14 +207,15 @@ describe("profile persistence", () => {
       "2026-08-10T20:10:00.000Z"
     );
 
-    expect(archived.activeProfileId).toBe("profile-copy");
+    expect(archived.activeProfileId).toBe("seed-quiet-corner-turnkey");
     expect(archived.profiles.find((profile) => profile.id === firstProfile(state).id))
       .toMatchObject({
         isActive: false,
         isArchived: true
       });
     expect(
-      archived.profiles.find((profile) => profile.id === "profile-copy")?.isActive
+      archived.profiles.find((profile) => profile.id === "seed-quiet-corner-turnkey")
+        ?.isActive
     ).toBe(true);
   });
 });

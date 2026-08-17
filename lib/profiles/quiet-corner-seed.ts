@@ -116,9 +116,37 @@ const renovationScope = [
   ]
 ] as const;
 
+const turnkeyRenovationScope = [
+  ["renovation.paint", "Paint", "bonus", 2],
+  ["renovation.flooring", "Flooring", "bonus", 1],
+  ["renovation.kitchen", "Kitchen", "penalty", -8],
+  ["renovation.bathrooms", "Bathrooms", "penalty", -8],
+  ["renovation.lighting", "Lighting", "bonus", 1],
+  ["renovation.landscaping", "Landscaping", "bonus", 1],
+  ["renovation.windows", "Windows", "penalty", -6],
+  ["renovation.siding", "Siding", "penalty", -6],
+  ["renovation.deck_porch", "Deck / porch", "penalty", -4],
+  ["renovation.minor_layout", "Minor layout changes", "penalty", -6],
+  ["renovation.foundation_repair", "Foundation repair", "penalty", -16],
+  [
+    "renovation.structural_rehabilitation",
+    "Structural rehabilitation",
+    "penalty",
+    -18
+  ],
+  ["renovation.whole_house_gut", "Whole-house gut renovation", "penalty", -20],
+  ["renovation.major_addition", "Major addition", "penalty", -16],
+  [
+    "renovation.extensive_systems_replacement",
+    "Extensive electrical/plumbing replacement",
+    "penalty",
+    -16
+  ]
+] as const;
+
 export const quietCornerSeedProfile: SearchProfile = {
   id: "seed-quiet-corner-second-home",
-  name: "Quiet Corner Second Home",
+  name: "Quiet Corner Second Home Rehab",
   description:
     "Acquire a dated or cosmetically unattractive home on an exceptional property, then complete a moderate renovation.",
   strategy:
@@ -259,3 +287,42 @@ export const quietCornerSeedProfile: SearchProfile = {
     })
   )
 };
+
+export const quietCornerTurnkeySeedProfile: SearchProfile = {
+  ...quietCornerSeedProfile,
+  id: "seed-quiet-corner-turnkey",
+  name: "Quiet Corner Turnkey",
+  description:
+    "Acquire a move-in-ready Quiet Corner second home with exceptional setting and only minimal refresh work.",
+  strategy:
+    "Prioritize scarce setting and resale attributes while avoiding properties that require meaningful renovation.",
+  isActive: false,
+  budget: {
+    ...quietCornerSeedProfile.budget,
+    renovationBudgetTarget: 7500,
+    renovationBudgetMax: 15000
+  },
+  renovationTolerance: "turnkey_minimal_refresh",
+  featurePreferences: [
+    ...quietCornerSeedProfile.featurePreferences.filter(
+      (preference) => preference.category !== "renovation"
+    ),
+    ...turnkeyRenovationScope.map(
+      ([featureKey, featureLabel, mode, weight], index): FeaturePreference => ({
+        id: `feature-${idFrom(featureKey)}`,
+        featureKey,
+        featureLabel,
+        category: "renovation",
+        rank: index + 1,
+        weight,
+        mode: mode as PreferenceMode,
+        enabled: true
+      })
+    )
+  ]
+};
+
+export const quietCornerSeedProfiles = [
+  quietCornerSeedProfile,
+  quietCornerTurnkeySeedProfile
+] as const;

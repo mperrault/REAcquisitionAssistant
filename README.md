@@ -7,7 +7,7 @@ Implemented slices:
 - Next.js App Router, TypeScript, Tailwind CSS, and shadcn-style UI primitives
 - Supabase-ready search profile schema with RLS
 - editable Search Profiles UI at `/profiles`
-- seeded Quiet Corner Second Home profile
+- seeded Quiet Corner Second Home Rehab and Quiet Corner Turnkey profiles
 - Supabase-ready property and property-facts schema with RLS
 - editable Properties UI at `/properties`
 - profile-driven scoring engine with hard rejections, category scores, labels, explanations, and missing-data warnings
@@ -76,6 +76,6 @@ Read these before expanding the app:
 
 ## Current Assumptions
 
-- The Quiet Corner profile is seed data, not scoring logic.
+- The Quiet Corner profiles are seed data, not scoring logic.
 - Supabase migrations define the target persistence model, while local storage backs the first editable UI slice.
 - Scoring uses the active profile and stores each run as a separate evaluation so profile-version history can be preserved.
