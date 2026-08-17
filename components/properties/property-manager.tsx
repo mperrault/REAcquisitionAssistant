@@ -36,6 +36,11 @@ import {
   upsertProperty
 } from "@/lib/properties/property-persistence";
 import {
+  filterAndSortProperties,
+  type PropertyScoreFilter,
+  type PropertySortMode
+} from "@/lib/properties/property-list-filters";
+import {
   type LifecycleStatus,
   type ListingStatus,
   type PropertyFact,
@@ -78,6 +83,28 @@ const tabs: Array<{
   { id: "systems", label: "Systems", icon: Wrench },
   { id: "notes", label: "Notes", icon: FileText },
   { id: "scoring", label: "Scoring", icon: BarChart3 }
+];
+
+const propertyScoreFilterOptions: Array<{
+  value: PropertyScoreFilter;
+  label: string;
+}> = [
+  { value: "all", label: "All Scores" },
+  { value: "scored", label: "Scored" },
+  { value: "not_scored", label: "Not Scored" },
+  { value: "hard_rejected", label: "Hard Rejected" },
+  { value: "missing_data", label: "Missing Score Data" }
+];
+
+const propertySortOptions: Array<{
+  value: PropertySortMode;
+  label: string;
+}> = [
+  { value: "updated_desc", label: "Recently Updated" },
+  { value: "score_desc", label: "Highest Score" },
+  { value: "score_asc", label: "Lowest Score" },
+  { value: "price_asc", label: "Lowest Price" },
+  { value: "price_desc", label: "Highest Price" }
 ];
 
 function parseNullableInteger(value: string) {
@@ -203,6 +230,10 @@ export function PropertyManager() {
   const [statusFilter, setStatusFilter] = React.useState<LifecycleStatus | "all">(
     "all"
   );
+  const [scoreFilter, setScoreFilter] =
+    React.useState<PropertyScoreFilter>("all");
+  const [sortMode, setSortMode] =
+    React.useState<PropertySortMode>("updated_desc");
   const [loadSource, setLoadSource] = React.useState<"storage" | "empty" | "reset">(
     "empty"
   );
@@ -251,25 +282,28 @@ export function PropertyManager() {
   const isDirty =
     propertyFingerprint(draft) !== propertyFingerprint(selectedProperty);
 
-  const filteredProperties = propertyState.properties.filter((property) => {
-    const searchable = [
-      property.addressLine1,
-      property.city,
-      property.state,
-      property.postalCode,
-      property.mlsId,
-      property.primaryPhotoUrl,
-      property.houseStyle,
-      property.notes
+  const propertyListResult = React.useMemo(
+    () =>
+      filterAndSortProperties({
+        properties: propertyState.properties,
+        scoreState,
+        profileId: activeProfile?.id,
+        query,
+        lifecycleStatus: statusFilter,
+        scoreFilter,
+        sortMode
+      }),
+    [
+      activeProfile?.id,
+      propertyState.properties,
+      query,
+      scoreFilter,
+      scoreState,
+      sortMode,
+      statusFilter
     ]
-      .join(" ")
-      .toLowerCase();
-    const matchesQuery = searchable.includes(query.toLowerCase());
-    const matchesStatus =
-      statusFilter === "all" || property.lifecycleStatus === statusFilter;
-
-    return matchesQuery && matchesStatus;
-  });
+  );
+  const filteredProperties = propertyListResult.properties;
 
   const statusCounts = React.useMemo(() => {
     return propertyState.properties.reduce<Record<string, number>>(
@@ -469,13 +503,42 @@ export function PropertyManager() {
                 ))}
               </Select>
             </Field>
+            <Field label="Score Filter">
+              <Select
+                value={scoreFilter}
+                onChange={(event) =>
+                  setScoreFilter(event.target.value as PropertyScoreFilter)
+                }
+              >
+                {propertyScoreFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Sort">
+              <Select
+                value={sortMode}
+                onChange={(event) =>
+                  setSortMode(event.target.value as PropertySortMode)
+                }
+              >
+                {propertySortOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
           </div>
 
           <Separator className="my-4" />
 
           {filteredProperties.length === 0 ? (
             <div className="rounded-md border border-dashed border-border bg-background p-5 text-center text-sm text-muted-foreground">
-              No properties match the current filter.
+              No properties match the current search, lifecycle, score, and sort
+              settings.
             </div>
           ) : (
             <div className="space-y-2">
