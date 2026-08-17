@@ -235,4 +235,42 @@ describe("property scoring", () => {
     expect(latest?.id).toBe("score-new");
     expect(latest?.normalizedScore).toBe(88);
   });
+
+  it("can return the latest evaluation across profiles or within one profile", () => {
+    const baseEvaluation = evaluateProperty(
+      createPropertyRecord({
+        id: "property-6",
+        city: "Woodstock",
+        state: "CT",
+        askingPrice: 340000
+      }),
+      quietCornerSeedProfile,
+      "2026-08-10T22:30:00.000Z",
+      () => "score-active-profile"
+    );
+    const otherProfileEvaluation = {
+      ...baseEvaluation,
+      id: "score-other-profile",
+      profileId: "profile-other",
+      profileVersion: 2,
+      normalizedScore: 92,
+      scoreLabel: "Other Profile Match",
+      evaluatedAt: "2026-08-10T22:35:00.000Z"
+    };
+    const state = addScoreEvaluation(
+      addScoreEvaluation(createEmptyScoreState(), baseEvaluation),
+      otherProfileEvaluation
+    );
+
+    const latestAnyProfile = getLatestScoreEvaluation(state, "property-6");
+    const latestActiveProfile = getLatestScoreEvaluation(
+      state,
+      "property-6",
+      quietCornerSeedProfile.id
+    );
+
+    expect(latestAnyProfile?.id).toBe("score-other-profile");
+    expect(latestAnyProfile?.normalizedScore).toBe(92);
+    expect(latestActiveProfile?.id).toBe("score-active-profile");
+  });
 });

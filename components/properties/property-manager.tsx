@@ -145,6 +145,33 @@ function formatAddress(property: PropertyRecord) {
   return line || "Untitled property";
 }
 
+function formatEvaluationDateTime(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function getScoreBadgeVariant(
+  evaluation: ScoreEvaluation
+): React.ComponentProps<typeof Badge>["variant"] {
+  if (evaluation.hardRejected) {
+    return "destructive";
+  }
+
+  if (evaluation.normalizedScore >= 70) {
+    return "success";
+  }
+
+  if (evaluation.normalizedScore >= 45) {
+    return "secondary";
+  }
+
+  return "warning";
+}
+
 function getLifecycleLabel(status: LifecycleStatus) {
   return (
     lifecycleStatusOptions.find((option) => option.value === status)?.label ??
@@ -525,12 +552,15 @@ export function PropertyManager() {
                       </Badge>
                       <Badge variant="outline">{draft.facts.length} facts</Badge>
                       {latestEvaluation ? (
-                        <Badge
-                          variant={
-                            latestEvaluation.hardRejected ? "destructive" : "success"
-                          }
-                        >
+                        <Badge variant={getScoreBadgeVariant(latestEvaluation)}>
                           Score {latestEvaluation.normalizedScore}
+                        </Badge>
+                      ) : activeProfile ? (
+                        <Badge variant="outline">No score</Badge>
+                      ) : null}
+                      {latestEvaluation ? (
+                        <Badge variant="outline">
+                          {latestEvaluation.scoreLabel}
                         </Badge>
                       ) : null}
                     </>
@@ -636,13 +666,26 @@ function PropertyScoreBadge({
   const evaluation = getLatestScoreEvaluation(scoreState, propertyId, profileId);
 
   if (!evaluation) {
-    return null;
+    return <Badge variant="outline">Not scored</Badge>;
   }
 
   return (
-    <Badge variant={evaluation.hardRejected ? "destructive" : "secondary"}>
-      {evaluation.normalizedScore}
-    </Badge>
+    <div
+      className="flex max-w-[9rem] flex-col items-end gap-1"
+      title={`${evaluation.scoreLabel} · Profile v${evaluation.profileVersion} · Evaluated ${formatEvaluationDateTime(
+        evaluation.evaluatedAt
+      )}`}
+    >
+      <Badge
+        variant={getScoreBadgeVariant(evaluation)}
+        className="whitespace-nowrap"
+      >
+        Score {evaluation.normalizedScore}
+      </Badge>
+      <span className="max-w-full truncate text-[11px] leading-tight text-muted-foreground">
+        {evaluation.scoreLabel}
+      </span>
+    </div>
   );
 }
 
