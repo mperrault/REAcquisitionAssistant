@@ -75,6 +75,12 @@ const zillowAshworthPhotoUrl =
   "https://photos.zillowstatic.com/fp/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-p_e.jpg";
 const zillowJeromePhotoUrl =
   "https://photos.zillowstatic.com/fp/cccccccccccccccccccccccccccccccc-p_e.jpg";
+const realtorStaffordPhotoUrl =
+  "https://ap.rdcpix.com/fee7f355cbed0ea0a694389feb659eb5l-m4046937172s.jpg";
+const realtorEastPhotoUrl =
+  "https://ap.rdcpix.com/804a9d1ab2622363f784ffddb59bdb93l-m341779919s.jpg";
+const realtorNewCityPhotoUrl =
+  "https://ap.rdcpix.com/5bf947cd5b69b518e3fe4ced7dc667a3l-m2252134929od.jpg";
 
 const zillowInstantAlertText = `New Listing: 18 Fiske Hill Rd Sturbridge, MA 01566. Your 'For Sale near Stafford Springs CT 06076' search
 
@@ -300,6 +306,70 @@ ${zillowRedirectUrl("44444444")}`,
     expect(result.candidates[1]?.primaryPhotoUrl).toBe(zillowJeromePhotoUrl);
   });
 
+  it("extracts and matches Realtor photos from alert HTML", () => {
+    const result = parseListingAlertText(
+      `Price dropped to $142,900: 365 East St
+
+175 W Stafford Rd, Stafford, CT 06076
+3 bd 3 ba 1,799 sqft
+https://www.realtor.com/realestateandhomes-detail/175-W-Stafford-Rd_Stafford_CT_06076_M12345
+
+365 East St, Stafford, CT 06076
+4 bd 2 ba 1,359 sqft
+https://www.realtor.com/realestateandhomes-detail/365-East-St_Stafford_CT_06076_M67890
+
+24 New City Rd, Stafford, CT 06076
+7 bd 3 ba 2,820 sqft
+https://www.realtor.com/realestateandhomes-detail/24-New-City-Rd_Stafford_CT_06076_M54321`,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <article>
+            <h2>365 East St, Stafford, CT 06076</h2>
+            <div class="photo-wrap">
+              <img src="${realtorEastPhotoUrl}" />
+            </div>
+            <p>For sale</p>
+            <strong>$142,900</strong>
+          </article>
+          <article>
+            <h2>24 New City Rd, Stafford, CT 06076</h2>
+            <div class="photo-wrap">
+              <img src="${realtorNewCityPhotoUrl}" />
+            </div>
+            <p>For sale</p>
+            <strong>&#36;182,000</strong>
+          </article>
+          <article>
+            <h2>175 W Stafford Rd, Stafford, CT 06076</h2>
+            <div class="photo-wrap">
+              <img src="${realtorStaffordPhotoUrl}" />
+            </div>
+            <p>For sale</p>
+            <strong>$275,000</strong>
+          </article>
+        </body></html>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(3);
+    expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual(
+      [realtorStaffordPhotoUrl, realtorEastPhotoUrl, realtorNewCityPhotoUrl]
+    );
+    expect(result.candidates.map((candidate) => candidate.askingPrice)).toEqual([
+      275000,
+      142900,
+      182000
+    ]);
+    expect(
+      result.candidates.every(
+        (candidate) =>
+          !candidate.warnings.includes(NO_PROPERTY_PHOTO_IN_HTML_WARNING)
+      )
+    ).toBe(true);
+  });
+
   it("explains when alert HTML has no property photo URL", () => {
     const result = parseListingAlertText(zillowInstantAlertText, {
       timestamp,
@@ -498,6 +568,44 @@ ${zillowRedirectUrl("44444444")}`,
     expect(secondRun.state.messages).toHaveLength(2);
   });
 
+  it("does not create duplicate candidates from Realtor price-drop fragments", () => {
+    const realtorPriceDropText = `Price dropped to $142,900: 365 East St
+
+This listing just decreased by $7,100 in your Stafford saved search
+https://www.realtor.com/saved-search/stafford-ct?cid=price-change
+
+Saved Search: Stafford, CT, Less than $450K, 2+ Beds
+https://www.realtor.com/realestateandhomes-search/Stafford_CT
+
+365 East St, Stafford, CT 06076
+$142,900
+4 bd 2 ba 1,359 sqft
+https://www.realtor.com/realestateandhomes-detail/365-East-St_Stafford_CT_06076_M12345
+
+365 East St, Stafford, CT 06076
+Price dropped to $142,900
+4 bd 2 ba 1,359 sqft
+https://www.realtor.com/realestateandhomes-detail/365-East-St_Stafford_CT_06076_M12345?cid=listing-card`;
+
+    const result = parseListingAlertText(realtorPriceDropText, {
+      bodyHtml: `<html><body>
+        <article>
+          <h2>365 East St, Stafford, CT 06076</h2>
+          <img src="${realtorEastPhotoUrl}" />
+        </article>
+      </body></html>`
+    });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.addressLine1).toBe("365 East St");
+    expect(result.candidates[0]?.city).toBe("Stafford");
+    expect(result.candidates[0]?.askingPrice).toBe(142900);
+    expect(result.candidates[0]?.bedrooms).toBe(4);
+    expect(result.candidates[0]?.bathrooms).toBe(2);
+    expect(result.candidates[0]?.livingSqft).toBe(1359);
+    expect(result.candidates[0]?.primaryPhotoUrl).toBe(realtorEastPhotoUrl);
+  });
+
   it("reprocesses stored messages without advancing the mailbox cursor", () => {
     const cursorTimestamp = "2026-08-11T00:00:00.000Z";
     const reprocessTimestamp = "2026-08-11T01:00:00.000Z";
@@ -553,6 +661,72 @@ ${zillowRedirectUrl("44444444")}`,
     expect(reprocessed.run?.messagesSeen).toBe(1);
     expect(reprocessed.state.sources[0]?.lastCheckedAt).toBe(cursorTimestamp);
     expect(reprocessed.state.candidates).toHaveLength(2);
+  });
+
+  it("removes stale source candidates that are not emitted during reprocess", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-stale",
+        name: "Saved Search Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const ingested = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-stale",
+        subject: "Stored alert",
+        from: "alerts@example.com",
+        receivedAt: timestamp,
+        bodyText: alertText
+      },
+      timestamp,
+      deterministicIds("ingest")
+    );
+    const staleCandidate = {
+      ...ingested.state.candidates[0]!,
+      id: "stale-candidate",
+      listingUrl: "https://www.realtor.com/saved-search/stafford-ct",
+      mlsId: "just",
+      addressLine1: "",
+      city: "",
+      state: "",
+      postalCode: "",
+      askingPrice: null,
+      bedrooms: null,
+      bathrooms: null,
+      livingSqft: null,
+      lotAcres: null,
+      yearBuilt: null,
+      listingRemarks: "This listing just decreased by $7,100.",
+      rawText: "This listing just decreased by $7,100.",
+      facts: [],
+      warnings: ["No address or town found.", "No asking price found."]
+    };
+
+    const reprocessed = reprocessListingAlertMessages(
+      {
+        ...ingested.state,
+        candidates: [staleCandidate, ...ingested.state.candidates]
+      },
+      source.id,
+      "2026-08-11T01:00:00.000Z",
+      deterministicIds("reprocess")
+    );
+
+    expect(reprocessed.state.candidates).toHaveLength(2);
+    expect(
+      reprocessed.state.candidates.some(
+        (candidate) => candidate.id === staleCandidate.id
+      )
+    ).toBe(false);
   });
 
   it("uses the alert subject when the message body omits the address", () => {

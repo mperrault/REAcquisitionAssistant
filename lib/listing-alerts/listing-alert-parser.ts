@@ -24,6 +24,8 @@ type FeaturePattern = {
 type ExtractedPhotoCandidate = {
   url: string;
   context: string;
+  supplementalText: string;
+  supplementalPrice: number | null;
   contextPriority: number;
   key: string;
   score: number;
@@ -202,6 +204,7 @@ function decodeHtmlValue(value: string) {
     .replace(/&amp;/gi, "&")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
+    .replace(/(?:&#36;|&dollar;)/gi, "$")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .trim();
@@ -306,22 +309,83 @@ function getHtmlSearchVariants(html: string) {
   ).filter((variant) => variant.trim());
 }
 
+function getNearbyImageContainerContext(html: string, index: number, tag: string) {
+  const before = html.slice(0, index);
+  const openMatches = Array.from(
+    before.matchAll(/<(article|tr|td|div|a)\b[^>]*>/gi)
+  ).reverse();
+  let fallbackContext = "";
+  const addressLikePattern = new RegExp(
+    `${streetNumberPatternSource}\\s+[^<]{1,80}\\b${streetSuffixPatternSource}\\b`,
+    "i"
+  );
+
+  for (const openMatch of openMatches) {
+    if (!openMatch?.[0] || openMatch.index === undefined) {
+      continue;
+    }
+
+    const tagName = openMatch[1];
+    const closePattern = new RegExp(`</${tagName}>`, "i");
+    const after = html.slice(index + tag.length);
+    const closeMatch = after.match(closePattern);
+
+    if (!closeMatch?.[0] || closeMatch.index === undefined) {
+      continue;
+    }
+
+    const end = index + tag.length + closeMatch.index + closeMatch[0].length;
+    const context = html.slice(openMatch.index, end);
+
+    if (context.length > 3000) {
+      continue;
+    }
+
+    fallbackContext ||= context;
+
+    if (addressLikePattern.test(context)) {
+      return context;
+    }
+  }
+
+  return fallbackContext || tag;
+}
+
+function getNearbyHtmlContext(html: string, index: number, length: number) {
+  return html.slice(
+    Math.max(0, index - 2500),
+    Math.min(html.length, index + length + 2500)
+  );
+}
+
 function getImageCandidatesFromHtml(html: string) {
   const candidates: Array<{
     url: string;
     context: string;
+    supplementalText: string;
+    supplementalPrice: number | null;
     contextPriority: number;
   }> = [];
 
   for (const htmlVariant of getHtmlSearchVariants(html)) {
     for (const match of htmlVariant.matchAll(/<img\b[^>]*>/gi)) {
       const tag = match[0];
-      const context = [
-        tag,
+      const semanticLabels = [
         getHtmlAttribute(tag, "alt"),
         getHtmlAttribute(tag, "title"),
         getHtmlAttribute(tag, "aria-label")
+      ].filter(Boolean);
+      const context =
+        semanticLabels.length > 0
+          ? [tag, ...semanticLabels].join(" ")
+          : getNearbyImageContainerContext(htmlVariant, match.index ?? 0, tag);
+      const supplementalText = [
+        getNearbyImageContainerContext(htmlVariant, match.index ?? 0, tag),
+        getNearbyHtmlContext(htmlVariant, match.index ?? 0, tag.length)
       ].join(" ");
+      const supplementalPrice = extractPrice(
+        getNearbyImageContainerContext(htmlVariant, match.index ?? 0, tag)
+      );
 
       for (const attributeName of [
         "src",
@@ -334,7 +398,13 @@ function getImageCandidatesFromHtml(html: string) {
         const value = getHtmlAttribute(tag, attributeName);
 
         if (value) {
-          candidates.push({ url: value, context, contextPriority: 3 });
+          candidates.push({
+            url: value,
+            context,
+            supplementalText,
+            supplementalPrice,
+            contextPriority: 3
+          });
         }
       }
 
@@ -349,7 +419,13 @@ function getImageCandidatesFromHtml(html: string) {
           const url = entry.trim().split(/\s+/)[0];
 
           if (url) {
-            candidates.push({ url, context, contextPriority: 3 });
+            candidates.push({
+              url,
+              context,
+              supplementalText,
+              supplementalPrice,
+              contextPriority: 3
+            });
           }
         }
       }
@@ -367,6 +443,8 @@ function getImageCandidatesFromHtml(html: string) {
       candidates.push({
         url: decodeHtmlValue(match[2]),
         context,
+        supplementalText: context,
+        supplementalPrice: extractPrice(context),
         contextPriority: 2
       });
     }
@@ -381,6 +459,8 @@ function getImageCandidatesFromHtml(html: string) {
       candidates.push({
         url: decodeHtmlValue(match[0]),
         context,
+        supplementalText: context,
+        supplementalPrice: extractPrice(context),
         contextPriority: 1
       });
     }
@@ -406,13 +486,18 @@ function isLikelyPropertyPhotoUrl(url: string, context: string) {
     const parsedUrl = new URL(url);
     const hostname = parsedUrl.hostname.toLowerCase();
     const pathname = parsedUrl.pathname.toLowerCase();
+    const isImagePath = /\.(?:jpe?g|png|webp)$/.test(pathname);
 
     if (
       hostname.endsWith("zillowstatic.com") &&
       pathname.startsWith("/fp/") &&
-      /\.(?:jpe?g|png|webp)$/.test(pathname) &&
+      isImagePath &&
       !/-l_c\./.test(pathname)
     ) {
+      return true;
+    }
+
+    if (hostname.endsWith("rdcpix.com") && isImagePath) {
       return true;
     }
   } catch {
@@ -436,9 +521,18 @@ function getPhotoDedupeKey(url: string) {
   try {
     const parsedUrl = new URL(url);
     const zillowPhotoMatch = parsedUrl.pathname.match(/\/fp\/([a-z0-9]+)-/i);
+    const realtorPhotoMatch = parsedUrl.pathname.match(
+      /^\/([a-z0-9]+l-m\d+)/i
+    );
 
     if (zillowPhotoMatch?.[1]) {
       return `${parsedUrl.hostname.toLowerCase()}:${zillowPhotoMatch[1]}`;
+    }
+
+    if (parsedUrl.hostname.toLowerCase().endsWith("rdcpix.com")) {
+      return `${parsedUrl.hostname.toLowerCase()}:${
+        realtorPhotoMatch?.[1] ?? parsedUrl.pathname.toLowerCase()
+      }`;
     }
 
     return `${parsedUrl.hostname.toLowerCase()}${parsedUrl.pathname}`;
@@ -486,6 +580,8 @@ function extractPhotoCandidatesFromHtml(html: string) {
       photosByKey.set(key, {
         url,
         context: candidate.context,
+        supplementalText: candidate.supplementalText,
+        supplementalPrice: candidate.supplementalPrice,
         contextPriority: candidate.contextPriority,
         key,
         score,
@@ -499,19 +595,25 @@ function extractPhotoCandidatesFromHtml(html: string) {
       photosByKey.set(key, { ...existing, url, score });
     }
 
-    if (candidate.contextPriority > existing.contextPriority) {
+    const current = photosByKey.get(key) ?? existing;
+
+    if (candidate.contextPriority > current.contextPriority) {
       photosByKey.set(key, {
-        ...(photosByKey.get(key) ?? existing),
+        ...current,
         context: candidate.context,
+        supplementalText: `${current.supplementalText} ${candidate.supplementalText}`,
+        supplementalPrice:
+          current.supplementalPrice ?? candidate.supplementalPrice,
         contextPriority: candidate.contextPriority
       });
-    } else if (candidate.contextPriority === existing.contextPriority) {
+    } else if (candidate.contextPriority === current.contextPriority) {
       photosByKey.set(key, {
-        ...(photosByKey.get(key) ?? existing),
-        context: `${existing.context} ${candidate.context}`
+        ...current,
+        context: `${current.context} ${candidate.context}`,
+        supplementalText: `${current.supplementalText} ${candidate.supplementalText}`,
+        supplementalPrice:
+          current.supplementalPrice ?? candidate.supplementalPrice
       });
-    } else {
-      photosByKey.set(key, photosByKey.get(key) ?? existing);
     }
   }
 
@@ -774,13 +876,77 @@ function matchFirst(text: string, patterns: RegExp[]) {
 }
 
 function extractPrice(text: string) {
-  return parseInteger(
+  const explicitPrice = parseInteger(
     matchFirst(text, [
       /^\s*\$\s*([\d,]{5,})(?:\s*(?:\||$))/m,
-      /(?:for sale at|listed for|list price|asking price)\s*[:\-]?\s*\$?\s*([\d,]{5,})/i,
-      /\$\s*([\d,]{5,})(?!\s*(?:\/mo|per month|monthly))/i
+      /(?:for sale at|listed for|list price|asking price|price dropped to|price reduced to|reduced to|dropped to)\s*[:\-]?\s*\$?\s*([\d,]{5,})/i
     ])
   );
+
+  if (explicitPrice !== null) {
+    return explicitPrice;
+  }
+
+  const genericMatch = text.match(
+    /\$\s*([\d,]{5,})(?!\s*(?:\/mo|per month|monthly))/i
+  );
+
+  if (!genericMatch?.[1]) {
+    return null;
+  }
+
+  const prefix = text.slice(0, genericMatch.index).slice(-40);
+
+  if (
+    /\b(?:decreased|dropped|reduced|cut|lowered|changed|went down)\s+by\s*$/i.test(
+      prefix
+    )
+  ) {
+    return null;
+  }
+
+  return parseInteger(genericMatch[1]);
+}
+
+function extractSupplementalPrice(
+  text: string,
+  address: ReturnType<typeof extractAddress>
+) {
+  const addressLine = address.addressLine1.trim();
+
+  if (!addressLine) {
+    return extractPrice(text);
+  }
+
+  const normalizedAddressLine = addressLine.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
+  const addressMatches = Array.from(
+    text.matchAll(new RegExp(normalizedAddressLine, "gi"))
+  );
+
+  for (const match of addressMatches) {
+    const index = match.index ?? 0;
+    const afterAddressText = text.slice(
+      index,
+      Math.min(text.length, index + 1200)
+    );
+    const price = extractPrice(afterAddressText);
+
+    if (price !== null) {
+      return price;
+    }
+
+    const beforeAddressText = text.slice(Math.max(0, index - 300), index);
+    const previousPrice = extractPrice(beforeAddressText);
+
+    if (previousPrice !== null) {
+      return previousPrice;
+    }
+  }
+
+  return extractPrice(text);
 }
 
 function extractBedrooms(text: string) {
@@ -832,7 +998,8 @@ function extractMlsId(text: string) {
   return (
     matchFirst(text, [
       /\bMLS(?:\s*(?:#|ID|Number|No\.?))?\s*[:#]?\s*([A-Z0-9-]{4,})\b/i,
-      /\bListing(?:\s*(?:#|ID|Number|No\.?))?\s*[:#]?\s*([A-Z0-9-]{4,})\b/i
+      /\bListing\s*(?:#|ID|Number|No\.?)\s*[:#]?\s*([A-Z0-9-]{4,})\b/i,
+      /\bListing\s*[:#]\s*([A-Z0-9-]{4,})\b/i
     ]) ?? ""
   );
 }
@@ -958,7 +1125,9 @@ function estimateConfidence(candidate: Omit<ListingCandidateExtract, "confidence
 function parseCandidateBlock(
   block: string,
   options: ParseOptions,
-  photoUrls: string[] = []
+  photoUrls: string[] = [],
+  supplementalText = "",
+  supplementalPrices: number[] = []
 ): ListingCandidateExtract | null {
   const normalizedBlock = normalizeText(block);
 
@@ -966,10 +1135,15 @@ function parseCandidateBlock(
     return null;
   }
 
+  const normalizedSupplementalText = normalizeText(supplementalText);
   const urls = extractUrls(normalizedBlock);
   const listingUrl = urls[0] ?? "";
   const address = extractAddress(normalizedBlock);
   const normalizedPhotoUrls = Array.from(new Set(photoUrls.filter(Boolean)));
+  const askingPrice =
+    extractPrice(normalizedBlock) ??
+    supplementalPrices.find((price) => Number.isFinite(price)) ??
+    extractSupplementalPrice(normalizedSupplementalText, address);
   const candidateWithoutConfidence = {
     listingUrl,
     mlsId: extractMlsId(normalizedBlock),
@@ -977,7 +1151,7 @@ function parseCandidateBlock(
     city: address.city,
     state: address.state,
     postalCode: address.postalCode,
-    askingPrice: extractPrice(normalizedBlock),
+    askingPrice,
     bedrooms: extractBedrooms(normalizedBlock),
     bathrooms: extractBathrooms(normalizedBlock),
     livingSqft: extractLivingSqft(normalizedBlock),
@@ -1013,15 +1187,17 @@ function parseCandidateBlock(
 
   const hasListingSignal = Boolean(
     candidate.addressLine1 ||
-    candidate.city ||
     candidate.mlsId ||
-    candidate.askingPrice !== null ||
-    candidate.bedrooms !== null ||
-    candidate.bathrooms !== null ||
-    candidate.livingSqft !== null ||
-    candidate.lotAcres !== null ||
-    candidate.yearBuilt !== null ||
-    candidate.facts.length > 0
+    (candidate.listingUrl &&
+      candidate.askingPrice !== null &&
+      [
+        candidate.bedrooms,
+        candidate.bathrooms,
+        candidate.livingSqft,
+        candidate.lotAcres,
+        candidate.yearBuilt,
+        candidate.facts.length > 0 ? 1 : null
+      ].some((value) => value !== null))
   );
 
   if (!hasListingSignal) {
@@ -1038,23 +1214,117 @@ export function normalizeListingCandidateKey(candidate: {
   city: string;
   state: string;
 }) {
-  if (candidate.listingUrl) {
-    return `url:${candidate.listingUrl.toLowerCase()}`;
-  }
-
   if (candidate.mlsId) {
     return `mls:${candidate.mlsId.toLowerCase()}`;
   }
 
-  return [
-    "address",
-    candidate.addressLine1,
-    candidate.city,
-    candidate.state
-  ]
+  if (candidate.addressLine1) {
+    return [
+      "address",
+      candidate.addressLine1,
+      candidate.city,
+      candidate.state
+    ]
+      .join(":")
+      .toLowerCase()
+      .replace(/[^a-z0-9:]+/g, "-");
+  }
+
+  if (candidate.listingUrl) {
+    return `url:${candidate.listingUrl.toLowerCase()}`;
+  }
+
+  return ["unknown", candidate.city, candidate.state]
     .join(":")
     .toLowerCase()
     .replace(/[^a-z0-9:]+/g, "-");
+}
+
+function mergeCandidateWarnings(candidate: ListingCandidateExtract) {
+  return Array.from(new Set(candidate.warnings)).filter((warning) => {
+    if (
+      candidate.primaryPhotoUrl &&
+      [
+        NO_EMAIL_HTML_PHOTO_WARNING,
+        NO_PROPERTY_PHOTO_IN_HTML_WARNING,
+        NO_MATCHING_PROPERTY_PHOTO_WARNING
+      ].includes(warning)
+    ) {
+      return false;
+    }
+
+    if (
+      candidate.listingUrl &&
+      warning === "No listing URL found."
+    ) {
+      return false;
+    }
+
+    if (
+      (candidate.addressLine1 || candidate.city) &&
+      warning === "No address or town found."
+    ) {
+      return false;
+    }
+
+    if (
+      candidate.askingPrice !== null &&
+      warning === "No asking price found."
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+function mergeListingCandidateExtracts(
+  existing: ListingCandidateExtract,
+  candidate: ListingCandidateExtract
+) {
+  const primaryPhotoUrl = candidate.primaryPhotoUrl || existing.primaryPhotoUrl;
+  const photoUrls = Array.from(
+    new Set([
+      ...(primaryPhotoUrl ? [primaryPhotoUrl] : []),
+      ...candidate.photoUrls,
+      ...existing.photoUrls
+    ])
+  );
+  const merged = {
+    ...existing,
+    ...candidate,
+    listingUrl: candidate.listingUrl || existing.listingUrl,
+    mlsId: candidate.mlsId || existing.mlsId,
+    addressLine1: candidate.addressLine1 || existing.addressLine1,
+    city: candidate.city || existing.city,
+    state: candidate.state || existing.state,
+    postalCode: candidate.postalCode || existing.postalCode,
+    askingPrice: candidate.askingPrice ?? existing.askingPrice,
+    bedrooms: candidate.bedrooms ?? existing.bedrooms,
+    bathrooms: candidate.bathrooms ?? existing.bathrooms,
+    livingSqft: candidate.livingSqft ?? existing.livingSqft,
+    lotAcres: candidate.lotAcres ?? existing.lotAcres,
+    yearBuilt: candidate.yearBuilt ?? existing.yearBuilt,
+    primaryPhotoUrl,
+    photoUrls,
+    facts: Array.from(
+      new Map(
+        [...existing.facts, ...candidate.facts].map((fact) => [
+          fact.factKey,
+          fact
+        ])
+      ).values()
+    ),
+    confidence: Math.max(existing.confidence, candidate.confidence),
+    warnings: [] as string[]
+  };
+
+  merged.warnings = mergeCandidateWarnings({
+    ...merged,
+    warnings: [...existing.warnings, ...candidate.warnings]
+  });
+
+  return listingCandidateExtractSchema.parse(merged);
 }
 
 export function parseListingAlertText(input: string, options: ParseOptions = {}) {
@@ -1078,7 +1348,15 @@ export function parseListingAlertText(input: string, options: ParseOptions = {})
       usedPhotoKeys
     );
     const candidatePhotoUrls = candidatePhotos.map((photo) => photo.url);
-    const candidate = parseCandidateBlock(block, options, candidatePhotoUrls);
+    const candidate = parseCandidateBlock(
+      block,
+      options,
+      candidatePhotoUrls,
+      candidatePhotos.map((photo) => photo.supplementalText).join("\n"),
+      candidatePhotos.flatMap((photo) =>
+        photo.supplementalPrice === null ? [] : [photo.supplementalPrice]
+      )
+    );
 
     if (!candidate) {
       continue;
@@ -1102,7 +1380,13 @@ export function parseListingAlertText(input: string, options: ParseOptions = {})
       }
     }
 
-    candidatesByKey.set(normalizeListingCandidateKey(candidate), candidate);
+    const key = normalizeListingCandidateKey(candidate);
+    const existing = candidatesByKey.get(key);
+
+    candidatesByKey.set(
+      key,
+      existing ? mergeListingCandidateExtracts(existing, candidate) : candidate
+    );
   }
 
   const candidates = Array.from(candidatesByKey.values());

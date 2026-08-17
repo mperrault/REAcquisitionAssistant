@@ -358,6 +358,7 @@ export function reprocessListingAlertMessages(
   let nextCandidates = state.candidates;
   let candidatesCreated = 0;
   let candidatesUpdated = 0;
+  const reprocessedCandidateKeys = new Set<string>();
   const warnings: string[] = [];
 
   for (const message of messages) {
@@ -372,6 +373,11 @@ export function reprocessListingAlertMessages(
     const parsedCandidates = parseResult.candidates.map((candidate) =>
       createListingCandidate(sourceId, message, candidate, timestamp, createId)
     );
+
+    for (const candidate of parsedCandidates) {
+      reprocessedCandidateKeys.add(normalizeListingCandidateKey(candidate));
+    }
+
     const upsertedCandidates = upsertCandidates(
       nextCandidates,
       parsedCandidates,
@@ -386,6 +392,13 @@ export function reprocessListingAlertMessages(
       ...parsedCandidates.flatMap((candidate) => candidate.warnings)
     );
   }
+
+  nextCandidates = nextCandidates.filter(
+    (candidate) =>
+      candidate.sourceId !== sourceId ||
+      candidate.status === "imported" ||
+      reprocessedCandidateKeys.has(normalizeListingCandidateKey(candidate))
+  );
 
   const run = listingAlertRunSchema.parse({
     id: createId(),
