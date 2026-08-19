@@ -93,7 +93,7 @@ const propertyScoreFilterOptions: Array<{
   { value: "scored", label: "Scored" },
   { value: "not_scored", label: "Not Scored" },
   { value: "hard_rejected", label: "Hard Rejected" },
-  { value: "missing_data", label: "Missing Score Data" }
+  { value: "missing_data", label: "Score Gaps" }
 ];
 
 const propertySortOptions: Array<{
@@ -197,6 +197,32 @@ function getScoreBadgeVariant(
   }
 
   return "warning";
+}
+
+function formatScoreGapCount(count: number) {
+  return `${count} ${count === 1 ? "score gap" : "score gaps"}`;
+}
+
+function formatScoreSummaryTitle(evaluation: ScoreEvaluation) {
+  const parts = [
+    `${evaluation.scoreLabel}: ${evaluation.normalizedScore}/100`,
+    `Profile v${evaluation.profileVersion}`,
+    `Evaluated ${formatEvaluationDateTime(evaluation.evaluatedAt)}`
+  ];
+
+  if (evaluation.hardRejectReasons.length > 0) {
+    parts.push(
+      `Hard rejects: ${evaluation.hardRejectReasons
+        .map((reason) => reason.label)
+        .join(", ")}`
+    );
+  }
+
+  if (evaluation.missingData.length > 0) {
+    parts.push(`Score gaps:\n${evaluation.missingData.join("\n")}`);
+  }
+
+  return parts.join(" · ");
 }
 
 function getLifecycleLabel(status: LifecycleStatus) {
@@ -615,15 +641,42 @@ export function PropertyManager() {
                       </Badge>
                       <Badge variant="outline">{draft.facts.length} facts</Badge>
                       {latestEvaluation ? (
-                        <Badge variant={getScoreBadgeVariant(latestEvaluation)}>
-                          Score {latestEvaluation.normalizedScore}
+                        <Badge
+                          variant={getScoreBadgeVariant(latestEvaluation)}
+                          title={formatScoreSummaryTitle(latestEvaluation)}
+                        >
+                          Score {latestEvaluation.normalizedScore}/100
                         </Badge>
                       ) : activeProfile ? (
                         <Badge variant="outline">No score</Badge>
                       ) : null}
                       {latestEvaluation ? (
-                        <Badge variant="outline">
+                        <Badge
+                          variant="outline"
+                          title={formatScoreSummaryTitle(latestEvaluation)}
+                        >
                           {latestEvaluation.scoreLabel}
+                        </Badge>
+                      ) : null}
+                      {latestEvaluation?.hardRejected ? (
+                        <Badge
+                          variant="destructive"
+                          title={latestEvaluation.hardRejectReasons
+                            .map((reason) => reason.detail)
+                            .join("\n")}
+                        >
+                          Rejected by Profile
+                        </Badge>
+                      ) : null}
+                      {latestEvaluation &&
+                      latestEvaluation.missingData.length > 0 ? (
+                        <Badge
+                          variant="warning"
+                          title={latestEvaluation.missingData.join("\n")}
+                        >
+                          {formatScoreGapCount(
+                            latestEvaluation.missingData.length
+                          )}
                         </Badge>
                       ) : null}
                     </>
@@ -735,19 +788,22 @@ function PropertyScoreBadge({
   return (
     <div
       className="flex max-w-[9rem] flex-col items-end gap-1"
-      title={`${evaluation.scoreLabel} · Profile v${evaluation.profileVersion} · Evaluated ${formatEvaluationDateTime(
-        evaluation.evaluatedAt
-      )}`}
+      title={formatScoreSummaryTitle(evaluation)}
     >
       <Badge
         variant={getScoreBadgeVariant(evaluation)}
         className="whitespace-nowrap"
       >
-        Score {evaluation.normalizedScore}
+        Score {evaluation.normalizedScore}/100
       </Badge>
       <span className="max-w-full truncate text-[11px] leading-tight text-muted-foreground">
         {evaluation.scoreLabel}
       </span>
+      {evaluation.missingData.length > 0 ? (
+        <Badge variant="warning" className="whitespace-nowrap">
+          {formatScoreGapCount(evaluation.missingData.length)}
+        </Badge>
+      ) : null}
     </div>
   );
 }

@@ -320,6 +320,20 @@ function getAlertProviderLabel(provenance: ReturnType<typeof getCandidateProvena
   return provenance.label === "IMAP Poll" ? "Email alert" : provenance.label;
 }
 
+function getListingSourceLabel(provenance: ReturnType<typeof getCandidateProvenance>) {
+  return `Listing source: ${getAlertProviderLabel(provenance)}`;
+}
+
+function formatScoreGapCount(count: number) {
+  return `${count} ${count === 1 ? "score gap" : "score gaps"}`;
+}
+
+function formatScoreGapTitle(missingData: string[]) {
+  return missingData.length > 0
+    ? `Missing scoring inputs:\n${missingData.join("\n")}`
+    : "No score gaps";
+}
+
 function getMissingPhotoReason(candidate: ListingCandidate) {
   return (
     candidate.warnings.find((warning) =>
@@ -1475,7 +1489,7 @@ export function ListingAlertManager() {
                 const missingPhotoLabel =
                   getMissingPhotoLabel(missingPhotoReason);
                 const scorePreview = scorePreviews.get(candidate.id);
-                const alertProviderLabel = getAlertProviderLabel(provenance);
+                const listingSourceLabel = getListingSourceLabel(provenance);
                 const isEnrichingCandidate = enrichingCandidateIds.has(
                   candidate.id
                 );
@@ -1582,7 +1596,7 @@ export function ListingAlertManager() {
                           </div>
                           <div className="mt-3 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                             <span className="font-medium text-foreground">
-                              {alertProviderLabel}
+                              {listingSourceLabel}
                             </span>
                             <span>{formatDateTime(provenance.receivedAt)}</span>
                             {provenance.messageSubject ? (
@@ -1604,8 +1618,15 @@ export function ListingAlertManager() {
                               ))}
                             {scorePreview &&
                             scorePreview.evaluation.missingData.length > 0 ? (
-                              <Badge variant="warning">
-                                {scorePreview.evaluation.missingData.length} missing
+                              <Badge
+                                variant="warning"
+                                title={formatScoreGapTitle(
+                                  scorePreview.evaluation.missingData
+                                )}
+                              >
+                                {formatScoreGapCount(
+                                  scorePreview.evaluation.missingData.length
+                                )}
                               </Badge>
                             ) : null}
                             {candidate.facts.slice(0, 6).map((fact) => (

@@ -52,6 +52,10 @@ function getMetricVariant(value: number): BadgeVariant {
   return value > 0 ? "warning" : "outline";
 }
 
+function formatScoreGapCount(count: number) {
+  return `${count} ${count === 1 ? "score gap" : "score gaps"}`;
+}
+
 export function ScoreEvaluationPanel({
   evaluation
 }: {
@@ -108,7 +112,7 @@ export function ScoreEvaluationPanel({
               variant={getMetricVariant(evaluation.penalties.length)}
             />
             <ScoreMetric
-              label="Missing"
+              label="Score Gaps"
               value={evaluation.missingData.length}
               variant={getMetricVariant(evaluation.missingData.length)}
             />
@@ -139,7 +143,7 @@ export function ScoreEvaluationPanel({
         emptyText="No scoring penalties matched."
       />
 
-      <MissingDataSection items={evaluation.missingData} />
+      <ScoreGapsSection items={evaluation.missingData} />
     </div>
   );
 }
@@ -237,7 +241,7 @@ function ResultSection({
   );
 }
 
-function MissingDataSection({
+function ScoreGapsSection({
   items
 }: {
   items: ScoreEvaluation["missingData"];
@@ -246,7 +250,10 @@ function MissingDataSection({
     <div className="rounded-md border border-border bg-background">
       <div className="flex items-center gap-2 border-b border-border p-4 text-sm font-semibold">
         <HelpCircle className="size-4" aria-hidden="true" />
-        Missing Data
+        Score Gaps
+        {items.length > 0 ? (
+          <Badge variant="warning">{formatScoreGapCount(items.length)}</Badge>
+        ) : null}
       </div>
       {items.length > 0 ? (
         <div className="grid gap-2 p-4">
@@ -259,7 +266,7 @@ function MissingDataSection({
       ) : (
         <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
           <CheckCircle2 className="size-4 text-primary" aria-hidden="true" />
-          No missing scoring data recorded.
+          No score gaps recorded.
         </div>
       )}
     </div>
