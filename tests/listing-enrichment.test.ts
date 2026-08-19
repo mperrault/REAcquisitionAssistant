@@ -1,0 +1,118 @@
+import { describe, expect, it } from "vitest";
+
+import { enrichListingCandidate } from "@/lib/listing-alerts/listing-enrichment";
+
+const baseCandidate = {
+  id: "candidate-1",
+  listingUrl:
+    "https://www.realtor.com/realestateandhomes-detail/47-High-St_Stafford_CT_06076_M33333",
+  addressLine1: "47 High St",
+  city: "Stafford",
+  state: "CT",
+  postalCode: "06076",
+  askingPrice: null,
+  primaryPhotoUrl: "",
+  photoUrls: []
+};
+
+function createFetchResponse(html: string, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => html
+  } as Response;
+}
+
+describe("listing page enrichment", () => {
+  it("fills missing price and photo from listing page metadata", async () => {
+    const result = await enrichListingCandidate(baseCandidate, async () =>
+      createFetchResponse(`<html>
+        <head>
+          <meta property="og:image" content="https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg" />
+          <script type="application/ld+json">
+            {
+              "@type": "SingleFamilyResidence",
+              "address": "47 High St, Stafford, CT 06076",
+              "offers": { "price": "315000" }
+            }
+          </script>
+        </head>
+        <body>47 High St Stafford CT 06076</body>
+      </html>`)
+    );
+
+    expect(result.candidateId).toBe(baseCandidate.id);
+    expect(result.updates.askingPrice).toBe(315000);
+    expect(result.updates.primaryPhotoUrl).toBe(
+      "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg"
+    );
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("does not return updates when fetched page belongs to another address", async () => {
+    const result = await enrichListingCandidate(baseCandidate, async () =>
+      createFetchResponse(`<html>
+        <head>
+          <meta property="og:image" content="https://ap.rdcpix.com/175staffordroadl-m4046937172s.jpg" />
+          <script type="application/ld+json">
+            {
+              "@type": "SingleFamilyResidence",
+              "address": "175 W Stafford Rd, Stafford, CT 06076",
+              "offers": { "price": "275000" }
+            }
+          </script>
+        </head>
+        <body>175 W Stafford Rd Stafford CT 06076</body>
+      </html>`)
+    );
+
+    expect(result.updates.askingPrice).toBeNull();
+    expect(result.updates.primaryPhotoUrl).toBe("");
+    expect(result.updates.photoUrls).toEqual([]);
+    expect(result.warnings).toContain(
+      "Fetched listing page did not include candidate address."
+    );
+  });
+
+  it("does not request updates for fields already populated", async () => {
+    const result = await enrichListingCandidate(
+      {
+        ...baseCandidate,
+        askingPrice: 315000,
+        primaryPhotoUrl:
+          "https://photos.zillowstatic.com/fp/existing-listing-image.jpg",
+        photoUrls: ["https://photos.zillowstatic.com/fp/existing-listing-image.jpg"]
+      },
+      async () =>
+        createFetchResponse(`<html>
+          <head>
+            <meta property="og:image" content="https://ap.rdcpix.com/new-image.jpg" />
+            <script type="application/ld+json">
+              {
+                "@type": "SingleFamilyResidence",
+                "address": "47 High St, Stafford, CT 06076",
+                "offers": { "price": "325000" }
+              }
+            </script>
+          </head>
+          <body>47 High St Stafford CT 06076</body>
+        </html>`)
+    );
+
+    expect(result.updates.askingPrice).toBeNull();
+    expect(result.updates.primaryPhotoUrl).toBe("");
+    expect(result.updates.photoUrls).toEqual([]);
+  });
+
+  it("returns an explicit warning when the listing page blocks fetches", async () => {
+    const result = await enrichListingCandidate(baseCandidate, async () =>
+      createFetchResponse("Too Many Requests", 429)
+    );
+
+    expect(result.updates.askingPrice).toBeNull();
+    expect(result.updates.primaryPhotoUrl).toBe("");
+    expect(result.warnings).toContain(
+      "Listing page fetch failed with HTTP 429."
+    );
+  });
+});

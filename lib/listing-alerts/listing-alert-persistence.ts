@@ -15,6 +15,9 @@ import {
   listingCandidateSchema
 } from "@/lib/listing-alerts/types";
 import {
+  NO_EMAIL_HTML_PHOTO_WARNING,
+  NO_MATCHING_PROPERTY_PHOTO_WARNING,
+  NO_PROPERTY_PHOTO_IN_HTML_WARNING,
   normalizeListingCandidateKey,
   parseListingAlertText
 } from "@/lib/listing-alerts/listing-alert-parser";
@@ -234,10 +237,66 @@ function upsertCandidates(
       continue;
     }
 
+    const primaryPhotoUrl = candidate.primaryPhotoUrl || existing.primaryPhotoUrl;
+    const photoUrls = Array.from(
+      new Set([
+        ...(primaryPhotoUrl ? [primaryPhotoUrl] : []),
+        ...candidate.photoUrls,
+        ...existing.photoUrls
+      ])
+    );
+    const mergedWarnings = Array.from(
+      new Set([...existing.warnings, ...candidate.warnings])
+    ).filter((warning) => {
+      if (
+        primaryPhotoUrl &&
+        [
+          NO_EMAIL_HTML_PHOTO_WARNING,
+          NO_PROPERTY_PHOTO_IN_HTML_WARNING,
+          NO_MATCHING_PROPERTY_PHOTO_WARNING
+        ].includes(warning)
+      ) {
+        return false;
+      }
+
+      if (
+        (candidate.askingPrice ?? existing.askingPrice) !== null &&
+        warning === "No asking price found."
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+
     nextCandidateMap.set(key, {
       ...existing,
       ...candidate,
       id: existing.id,
+      listingUrl: candidate.listingUrl || existing.listingUrl,
+      mlsId: candidate.mlsId || existing.mlsId,
+      addressLine1: candidate.addressLine1 || existing.addressLine1,
+      city: candidate.city || existing.city,
+      state: candidate.state || existing.state,
+      postalCode: candidate.postalCode || existing.postalCode,
+      askingPrice: candidate.askingPrice ?? existing.askingPrice,
+      bedrooms: candidate.bedrooms ?? existing.bedrooms,
+      bathrooms: candidate.bathrooms ?? existing.bathrooms,
+      livingSqft: candidate.livingSqft ?? existing.livingSqft,
+      lotAcres: candidate.lotAcres ?? existing.lotAcres,
+      yearBuilt: candidate.yearBuilt ?? existing.yearBuilt,
+      primaryPhotoUrl,
+      photoUrls,
+      facts: Array.from(
+        new Map(
+          [...existing.facts, ...candidate.facts].map((fact) => [
+            fact.factKey,
+            fact
+          ])
+        ).values()
+      ),
+      confidence: Math.max(existing.confidence, candidate.confidence),
+      warnings: mergedWarnings,
       status: existing.status,
       importedPropertyId: existing.importedPropertyId,
       createdAt: existing.createdAt,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createPropertyDraftFromListingCandidate,
+  NO_MATCHING_PROPERTY_PHOTO_WARNING,
   NO_PROPERTY_PHOTO_IN_HTML_WARNING,
   parseListingAlertText
 } from "@/lib/listing-alerts/listing-alert-parser";
@@ -81,6 +82,10 @@ const realtorEastPhotoUrl =
   "https://ap.rdcpix.com/804a9d1ab2622363f784ffddb59bdb93l-m341779919s.jpg";
 const realtorNewCityPhotoUrl =
   "https://ap.rdcpix.com/5bf947cd5b69b518e3fe4ced7dc667a3l-m2252134929od.jpg";
+const realtorGreenPhotoUrl =
+  "https://ap.rdcpix.com/15greenstreetstaffordct06076l-m2205747253s.jpg";
+const realtorHighPhotoUrl =
+  "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg";
 
 const zillowInstantAlertText = `New Listing: 18 Fiske Hill Rd Sturbridge, MA 01566. Your 'For Sale near Stafford Springs CT 06076' search
 
@@ -370,6 +375,235 @@ https://www.realtor.com/realestateandhomes-detail/24-New-City-Rd_Stafford_CT_060
     ).toBe(true);
   });
 
+  it("keeps Realtor image-first card prices and photos with the correct address", () => {
+    const result = parseListingAlertText(
+      `Just sold: 7 Stafford Hts
+
+15 Green St, Stafford, CT 06076
+7 bed 3 bath 3,092 sqft
+https://www.realtor.com/realestateandhomes-detail/15-Green-St_Stafford_CT_06076_M11111
+
+175 W Stafford Rd, Stafford, CT 06076
+3 bed 3 bath 1,799 sqft
+https://www.realtor.com/realestateandhomes-detail/175-W-Stafford-Rd_Stafford_CT_06076_M22222
+
+47 High St, Stafford, CT 06076
+3 bed 2 bath 2,112 sqft
+https://www.realtor.com/realestateandhomes-detail/47-High-St_Stafford_CT_06076_M33333`,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <article>
+            <div class="photo-wrap"><img src="${realtorGreenPhotoUrl}" /></div>
+            <p>For sale</p>
+            <strong>$424,000</strong>
+            <p>7 bed 3 bath 3,092 sqft</p>
+            <p>15 Green St</p>
+            <p>Stafford, CT 06076</p>
+          </article>
+          <article>
+            <div class="photo-wrap"><img src="${realtorStaffordPhotoUrl}" /></div>
+            <p>For sale</p>
+            <strong>$275,000</strong>
+            <p>3 bed 3 bath 1,799 sqft</p>
+            <p>175 W Stafford Rd</p>
+            <p>Stafford, CT 06076</p>
+          </article>
+          <article>
+            <div class="photo-wrap"><img src="${realtorHighPhotoUrl}" /></div>
+            <p>For sale</p>
+            <strong>$315,000</strong>
+            <p>3 bed 2 bath 2,112 sqft</p>
+            <p>47 High St</p>
+            <p>Stafford, CT 06076</p>
+          </article>
+        </body></html>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(3);
+    expect(result.candidates.map((candidate) => candidate.addressLine1)).toEqual([
+      "15 Green St",
+      "175 W Stafford Rd",
+      "47 High St"
+    ]);
+    expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual(
+      [realtorGreenPhotoUrl, realtorStaffordPhotoUrl, realtorHighPhotoUrl]
+    );
+    expect(result.candidates.map((candidate) => candidate.askingPrice)).toEqual([
+      424000,
+      275000,
+      315000
+    ]);
+  });
+
+  it("keeps Realtor two-column image rows aligned with their detail columns", () => {
+    const result = parseListingAlertText(
+      `Just sold: 7 Stafford Hts
+
+175 W Stafford Rd, Stafford, CT 06076
+3 bed 3 bath 1,799 sqft
+https://www.realtor.com/realestateandhomes-detail/175-W-Stafford-Rd_Stafford_CT_06076_M22222
+
+47 High St, Stafford, CT 06076
+3 bed 2 bath 2,112 sqft
+https://www.realtor.com/realestateandhomes-detail/47-High-St_Stafford_CT_06076_M33333`,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <table>
+            <tr>
+              <td><img src="${realtorStaffordPhotoUrl}" /></td>
+              <td><img src="${realtorHighPhotoUrl}" /></td>
+            </tr>
+            <tr>
+              <td>
+                <p>For sale</p>
+                <strong>$275,000</strong>
+                <p>3 bed 3 bath 1,799 sqft</p>
+                <p>175 W Stafford Rd</p>
+                <p>Stafford, CT 06076</p>
+              </td>
+              <td>
+                <p>For sale</p>
+                <strong>$315,000</strong>
+                <p>3 bed 2 bath 2,112 sqft</p>
+                <p>47 High St</p>
+                <p>Stafford, CT 06076</p>
+              </td>
+            </tr>
+          </table>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual(
+      [realtorStaffordPhotoUrl, realtorHighPhotoUrl]
+    );
+    expect(result.candidates.map((candidate) => candidate.askingPrice)).toEqual([
+      275000,
+      315000
+    ]);
+  });
+
+  it("matches Realtor photo cards by shared tracking URL when image context omits address", () => {
+    const sharedTrackingUrl =
+      "https://e.e.mail.realtor.com/c2/1946:source:d260818:user:run/f54e0392?jwtH=header&jwtP=payload&jwtS=signature#app";
+    const result = parseListingAlertText(
+      `Price dropped to $250,000: 175 W Stafford Rd
+
+[${realtorHighPhotoUrl}]${sharedTrackingUrl}
+For sale
+$315,000
+${sharedTrackingUrl}$10,000
+3 bed 2 bath 2,112 sqft
+${sharedTrackingUrl}47
+High St
+Stafford, CT 06076
+${sharedTrackingUrl}View
+listing
+
+47 High St, Stafford, CT 06076
+3 bed 2 bath 2,112 sqft
+[${sharedTrackingUrl}]47 High St`,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <table>
+            <tr>
+              <td>
+                <a href="${sharedTrackingUrl}">
+                  <img src="${realtorHighPhotoUrl}" />
+                </a>
+              </td>
+            </tr>
+            <tr>
+              <td><a href="${sharedTrackingUrl}">$315,000</a></td>
+            </tr>
+            <tr>
+              <td><a href="${sharedTrackingUrl}">47 High St<br>Stafford, CT 06076</a></td>
+            </tr>
+          </table>
+        </body></html>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.addressLine1).toBe("47 High St");
+    expect(result.candidates[0]?.askingPrice).toBe(315000);
+    expect(result.candidates[0]?.primaryPhotoUrl).toBe(realtorHighPhotoUrl);
+  });
+
+  it("keeps order fallback when Realtor multi-photo HTML has no address context", () => {
+    const result = parseListingAlertText(
+      `Just sold: 7 Stafford Hts
+
+175 W Stafford Rd, Stafford, CT 06076
+3 bed 3 bath 1,799 sqft
+https://www.realtor.com/realestateandhomes-detail/175-W-Stafford-Rd_Stafford_CT_06076_M22222
+
+47 High St, Stafford, CT 06076
+3 bed 2 bath 2,112 sqft
+https://www.realtor.com/realestateandhomes-detail/47-High-St_Stafford_CT_06076_M33333`,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <img src="${realtorStaffordPhotoUrl}" />
+          <img src="https://ap.rdcpix.com/d4f8fcb45a9c4c129fe8edb723999a77l-m1112937458s.jpg" />
+        </body></html>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(2);
+    expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual(
+      [
+        realtorStaffordPhotoUrl,
+        "https://ap.rdcpix.com/d4f8fcb45a9c4c129fe8edb723999a77l-m1112937458s.jpg"
+      ]
+    );
+    expect(
+      result.candidates.every((candidate) =>
+        !candidate.warnings.includes(NO_MATCHING_PROPERTY_PHOTO_WARNING)
+      )
+    ).toBe(true);
+  });
+
+  it("does not match a Realtor photo using only shared town and postal code", () => {
+    const result = parseListingAlertText(
+      `Just sold: 7 Stafford Hts
+
+47 High St, Stafford, CT 06076
+3 bed 2 bath 2,112 sqft
+https://www.realtor.com/realestateandhomes-detail/47-High-St_Stafford_CT_06076_M33333`,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <article>
+            <img src="${realtorStaffordPhotoUrl}" />
+            <p>For sale</p>
+            <strong>$275,000</strong>
+            <p>3 bed 3 bath 1,799 sqft</p>
+            <p>175 W Stafford Rd</p>
+            <p>Stafford, CT 06076</p>
+          </article>
+        </body></html>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.addressLine1).toBe("47 High St");
+    expect(result.candidates[0]?.primaryPhotoUrl).toBe("");
+    expect(result.candidates[0]?.askingPrice).toBeNull();
+    expect(result.candidates[0]?.warnings).toContain(
+      NO_MATCHING_PROPERTY_PHOTO_WARNING
+    );
+  });
+
   it("explains when alert HTML has no property photo URL", () => {
     const result = parseListingAlertText(zillowInstantAlertText, {
       timestamp,
@@ -604,6 +838,75 @@ https://www.realtor.com/realestateandhomes-detail/365-East-St_Stafford_CT_06076_
     expect(result.candidates[0]?.bathrooms).toBe(2);
     expect(result.candidates[0]?.livingSqft).toBe(1359);
     expect(result.candidates[0]?.primaryPhotoUrl).toBe(realtorEastPhotoUrl);
+  });
+
+  it("preserves known Realtor price and photo when a later alert omits them", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-preserve-known",
+        name: "Saved Search Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const firstRun = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-with-photo",
+        subject: "Price dropped to $250,000: 175 W Stafford Rd",
+        from: '"realtor.com" <info@notifications.realtor.com>',
+        receivedAt: "2026-08-18T16:09:54.000Z",
+        bodyText: `Price dropped to $250,000: 175 W Stafford Rd
+
+175 W Stafford Rd, Stafford, CT 06076
+$250,000
+3 bed 3 bath 1,799 sqft
+https://www.realtor.com/realestateandhomes-detail/175-W-Stafford-Rd_Stafford_CT_06076_M22222`,
+        bodyHtml: `<html><body>
+          <article>
+            <img src="${realtorStaffordPhotoUrl}" />
+            <strong>$250,000</strong>
+            <p>175 W Stafford Rd</p>
+            <p>Stafford, CT 06076</p>
+          </article>
+        </body></html>`
+      },
+      "2026-08-18T16:09:54.000Z",
+      deterministicIds("first")
+    );
+    const secondRun = ingestListingAlertText(
+      firstRun.state,
+      source.id,
+      {
+        externalMessageId: "message-without-photo",
+        subject: "Just sold: 62 West St",
+        from: '"realtor.com" <info@notifications.realtor.com>',
+        receivedAt: "2026-08-19T12:54:20.000Z",
+        bodyText: `Just sold: 62 West St
+
+175 W Stafford Rd, Stafford, CT 06076
+3 bed 3 bath 1,799 sqft
+https://www.realtor.com/realestateandhomes-detail/175-W-Stafford-Rd_Stafford_CT_06076_M22222`
+      },
+      "2026-08-19T12:54:20.000Z",
+      deterministicIds("second")
+    );
+    const candidate = secondRun.state.candidates.find(
+      (item) => item.addressLine1.replace(/\s+/g, " ") === "175 W Stafford Rd"
+    );
+
+    expect(secondRun.run.candidatesCreated).toBe(0);
+    expect(secondRun.run.candidatesUpdated).toBe(1);
+    expect(candidate?.askingPrice).toBe(250000);
+    expect(candidate?.primaryPhotoUrl).toBe(realtorStaffordPhotoUrl);
+    expect(candidate?.warnings).not.toContain(NO_MATCHING_PROPERTY_PHOTO_WARNING);
+    expect(candidate?.warnings).not.toContain("No asking price found.");
   });
 
   it("reprocesses stored messages without advancing the mailbox cursor", () => {

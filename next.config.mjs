@@ -6,6 +6,10 @@ const nextConfig = {
       {
         protocol: "https",
         hostname: "photos.zillowstatic.com"
+      },
+      {
+        protocol: "https",
+        hostname: "ap.rdcpix.com"
       }
     ]
   }

@@ -11,6 +11,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Sparkles,
   Trash2,
   XCircle
 } from "lucide-react";
@@ -64,6 +65,10 @@ import {
   filterAndSortListingCandidates,
   LOW_CONFIDENCE_THRESHOLD
 } from "@/lib/listing-alerts/listing-alert-triage";
+import {
+  type ListingCandidateEnrichmentResponse,
+  listingCandidateEnrichmentResponseSchema
+} from "@/lib/listing-alerts/listing-enrichment";
 import { listingAlertPollResponseSchema } from "@/lib/listing-alerts/polling-types";
 import {
   createEmptyPropertyState,
@@ -164,6 +169,10 @@ function formatCurrency(value: number | null) {
     currency: "USD",
     maximumFractionDigits: 0
   }).format(value);
+}
+
+function formatNumber(value: number | null) {
+  return value === null ? null : value.toLocaleString();
 }
 
 function formatDateTime(value: string | null) {
@@ -293,6 +302,24 @@ function getCandidateProvenance(
   };
 }
 
+function getAlertProviderLabel(provenance: ReturnType<typeof getCandidateProvenance>) {
+  const searchable = `${provenance.from} ${provenance.messageSubject}`.toLowerCase();
+
+  if (searchable.includes("realtor")) {
+    return "Realtor alert";
+  }
+
+  if (searchable.includes("zillow")) {
+    return "Zillow alert";
+  }
+
+  if (searchable.includes("redfin")) {
+    return "Redfin alert";
+  }
+
+  return provenance.label === "IMAP Poll" ? "Email alert" : provenance.label;
+}
+
 function getMissingPhotoReason(candidate: ListingCandidate) {
   return (
     candidate.warnings.find((warning) =>
@@ -303,6 +330,84 @@ function getMissingPhotoReason(candidate: ListingCandidate) {
       ].includes(warning)
     ) ?? "No photo in alert"
   );
+}
+
+function canEnrichCandidate(candidate: ListingCandidate) {
+  return Boolean(
+    candidate.listingUrl && (!candidate.primaryPhotoUrl || candidate.askingPrice === null)
+  );
+}
+
+function mergeEnrichmentIntoCandidate(
+  candidate: ListingCandidate,
+  enrichment: ListingCandidateEnrichmentResponse,
+  timestamp: string
+) {
+  if (candidate.id !== enrichment.candidateId) {
+    return { candidate, changed: false };
+  }
+
+  const shouldApplyPrice =
+    candidate.askingPrice === null && enrichment.updates.askingPrice !== null;
+  const shouldApplyPhoto =
+    !candidate.primaryPhotoUrl && Boolean(enrichment.updates.primaryPhotoUrl);
+  const primaryPhotoUrl = shouldApplyPhoto
+    ? enrichment.updates.primaryPhotoUrl
+    : candidate.primaryPhotoUrl;
+  const photoUrls = Array.from(
+    new Set([
+      ...(primaryPhotoUrl ? [primaryPhotoUrl] : []),
+      ...enrichment.updates.photoUrls,
+      ...candidate.photoUrls
+    ])
+  );
+  const warnings = Array.from(
+    new Set([
+      ...candidate.warnings.filter((warning) => {
+        if (
+          shouldApplyPhoto &&
+          [
+            NO_EMAIL_HTML_PHOTO_WARNING,
+            NO_PROPERTY_PHOTO_IN_HTML_WARNING,
+            NO_MATCHING_PROPERTY_PHOTO_WARNING
+          ].includes(warning)
+        ) {
+          return false;
+        }
+
+        if (shouldApplyPrice && warning === "No asking price found.") {
+          return false;
+        }
+
+        return true;
+      }),
+      ...enrichment.warnings.map((warning) => `Enrichment: ${warning}`)
+    ])
+  );
+  const warningsChanged =
+    warnings.length !== candidate.warnings.length ||
+    warnings.some((warning, index) => warning !== candidate.warnings[index]);
+
+  if (!shouldApplyPrice && !shouldApplyPhoto && !warningsChanged) {
+    return { candidate, changed: false };
+  }
+
+  return {
+    candidate: {
+      ...candidate,
+      askingPrice: shouldApplyPrice
+        ? enrichment.updates.askingPrice
+        : candidate.askingPrice,
+      primaryPhotoUrl,
+      photoUrls,
+      warnings,
+      updatedAt:
+        shouldApplyPrice || shouldApplyPhoto || warningsChanged
+          ? timestamp
+          : candidate.updatedAt
+    },
+    changed: shouldApplyPrice || shouldApplyPhoto
+  };
 }
 
 function getMissingPhotoLabel(reason: string) {
@@ -350,7 +455,15 @@ function getScorePreviewLabel(scorePreview: CandidateScorePreview | undefined) {
     return "Rejected";
   }
 
-  return `Score ${scorePreview.evaluation.normalizedScore}`;
+  if (scorePreview.evaluation.normalizedScore >= 70) {
+    return `Strong ${scorePreview.evaluation.normalizedScore}`;
+  }
+
+  if (scorePreview.evaluation.normalizedScore >= 45) {
+    return `Possible ${scorePreview.evaluation.normalizedScore}`;
+  }
+
+  return `Weak ${scorePreview.evaluation.normalizedScore}`;
 }
 
 function createDefaultSource() {
@@ -408,6 +521,9 @@ export function ListingAlertManager() {
     React.useState<CandidateSortMode>("received_desc");
   const [alertText, setAlertText] = React.useState(sampleAlertText);
   const [isPolling, setIsPolling] = React.useState(false);
+  const [enrichingCandidateIds, setEnrichingCandidateIds] = React.useState<
+    Set<string>
+  >(() => new Set());
   const [loadSource, setLoadSource] = React.useState<"storage" | "empty" | "reset">(
     "empty"
   );
@@ -512,6 +628,10 @@ export function ListingAlertManager() {
       filteredCandidates
         .filter((candidate) => candidate.status === "new")
         .map((candidate) => candidate.id),
+    [filteredCandidates]
+  );
+  const visibleEnrichableCandidates = React.useMemo(
+    () => filteredCandidates.filter(canEnrichCandidate),
     [filteredCandidates]
   );
 
@@ -753,6 +873,133 @@ export function ListingAlertManager() {
       );
     } finally {
       setIsPolling(false);
+    }
+  }
+
+  async function fetchCandidateEnrichment(candidate: ListingCandidate) {
+    const response = await fetch("/api/listing-alerts/enrich-listing", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        candidate: {
+          id: candidate.id,
+          listingUrl: candidate.listingUrl,
+          addressLine1: candidate.addressLine1,
+          city: candidate.city,
+          state: candidate.state,
+          postalCode: candidate.postalCode,
+          askingPrice: candidate.askingPrice,
+          primaryPhotoUrl: candidate.primaryPhotoUrl,
+          photoUrls: candidate.photoUrls
+        }
+      })
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        typeof payload?.error === "string"
+          ? payload.error
+          : "Listing enrichment failed."
+      );
+    }
+
+    return listingCandidateEnrichmentResponseSchema.parse(payload);
+  }
+
+  async function handleEnrichCandidates(candidates: ListingCandidate[]) {
+    const enrichableCandidates = candidates.filter(canEnrichCandidate);
+
+    if (enrichableCandidates.length === 0) {
+      return;
+    }
+
+    setEnrichingCandidateIds(
+      (currentIds) =>
+        new Set([
+          ...Array.from(currentIds),
+          ...enrichableCandidates.map((candidate) => candidate.id)
+        ])
+    );
+    setActionStatus(`Enriching ${enrichableCandidates.length} candidate(s)`);
+
+    try {
+      const results: ListingCandidateEnrichmentResponse[] = [];
+      const errors: string[] = [];
+
+      for (const candidate of enrichableCandidates) {
+        try {
+          results.push(await fetchCandidateEnrichment(candidate));
+        } catch (error) {
+          errors.push(error instanceof Error ? error.message : "Enrichment failed");
+        }
+      }
+
+      const timestamp = new Date().toISOString();
+      let enrichedCount = 0;
+      const nextCandidates = listingState.candidates.map((candidate) => {
+        const enrichment = results.find(
+          (result) => result.candidateId === candidate.id
+        );
+
+        if (!enrichment) {
+          return candidate;
+        }
+
+        const merged = mergeEnrichmentIntoCandidate(
+          candidate,
+          enrichment,
+          timestamp
+        );
+
+        if (merged.changed) {
+          enrichedCount += 1;
+        }
+
+        return merged.candidate;
+      });
+      const warningCount = results.reduce(
+        (count, result) => count + result.warnings.length,
+        0
+      );
+      const firstWarning = results
+        .flatMap((result) => result.warnings)
+        .find(Boolean);
+      const firstError = errors.find(Boolean);
+      const warningStatus =
+        warningCount > 0
+          ? `, ${warningCount} fetch warning(s)${
+              firstWarning ? `: ${firstWarning}` : ""
+            }`
+          : "";
+      const errorStatus =
+        errors.length > 0
+          ? `, ${errors.length} failed${firstError ? `: ${firstError}` : ""}`
+          : "";
+
+      persistListingState(
+        {
+          ...listingState,
+          candidates: nextCandidates
+        },
+        `${enrichedCount} enriched${warningStatus}${errorStatus}`
+      );
+    } catch (error) {
+      setActionStatus(
+        error instanceof Error ? error.message : "Listing enrichment failed"
+      );
+    } finally {
+      setEnrichingCandidateIds((currentIds) => {
+        const nextIds = new Set(currentIds);
+
+        for (const candidate of enrichableCandidates) {
+          nextIds.delete(candidate.id);
+        }
+
+        return nextIds;
+      });
     }
   }
 
@@ -1135,6 +1382,19 @@ export function ListingAlertManager() {
                   type="button"
                   variant="outline"
                   size="sm"
+                  onClick={() => handleEnrichCandidates(visibleEnrichableCandidates)}
+                  disabled={
+                    visibleEnrichableCandidates.length === 0 ||
+                    enrichingCandidateIds.size > 0
+                  }
+                >
+                  <Sparkles aria-hidden="true" />
+                  Enrich Missing
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
                   onClick={handleIgnoreVisibleCandidates}
                   disabled={visibleNewCandidateIds.length === 0}
                 >
@@ -1215,10 +1475,14 @@ export function ListingAlertManager() {
                 const missingPhotoLabel =
                   getMissingPhotoLabel(missingPhotoReason);
                 const scorePreview = scorePreviews.get(candidate.id);
+                const alertProviderLabel = getAlertProviderLabel(provenance);
+                const isEnrichingCandidate = enrichingCandidateIds.has(
+                  candidate.id
+                );
 
                 return (
                   <article key={candidate.id} className="p-4 sm:p-5">
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
                       <div className="flex min-w-0 flex-1 flex-col gap-4 sm:flex-row">
                         {candidate.primaryPhotoUrl ? (
                           <div className="relative h-32 w-full shrink-0 overflow-hidden rounded-md border border-border bg-secondary sm:h-28 sm:w-40">
@@ -1260,7 +1524,6 @@ export function ListingAlertManager() {
                                 {getScorePreviewLabel(scorePreview)}
                               </Badge>
                             ) : null}
-                            <Badge variant="outline">{provenance.label}</Badge>
                             {candidate.primaryPhotoUrl ? (
                               <Badge variant="outline">
                                 {candidate.photoUrls.length || 1} photo
@@ -1269,39 +1532,66 @@ export function ListingAlertManager() {
                               <Badge variant="warning">{missingPhotoLabel}</Badge>
                             )}
                           </div>
-                          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                            <span>{provenance.sourceName}</span>
+                          <div className="mt-3 flex flex-wrap items-stretch gap-2">
+                            <div
+                              className={`rounded-md border px-3 py-2 ${
+                                candidate.askingPrice === null
+                                  ? "border-amber-200 bg-amber-50 text-amber-900"
+                                  : "border-border bg-background"
+                              }`}
+                            >
+                              <div className="text-[11px] font-medium uppercase text-muted-foreground">
+                                Price
+                              </div>
+                              <div className="text-base font-semibold leading-tight">
+                                {formatCurrency(candidate.askingPrice)}
+                              </div>
+                            </div>
+                            <div className="rounded-md border border-border bg-background px-3 py-2">
+                              <div className="text-[11px] font-medium uppercase text-muted-foreground">
+                                Beds
+                              </div>
+                              <div className="text-base font-semibold leading-tight">
+                                {candidate.bedrooms ?? "-"}
+                              </div>
+                            </div>
+                            <div className="rounded-md border border-border bg-background px-3 py-2">
+                              <div className="text-[11px] font-medium uppercase text-muted-foreground">
+                                Baths
+                              </div>
+                              <div className="text-base font-semibold leading-tight">
+                                {candidate.bathrooms ?? "-"}
+                              </div>
+                            </div>
+                            <div className="rounded-md border border-border bg-background px-3 py-2">
+                              <div className="text-[11px] font-medium uppercase text-muted-foreground">
+                                Sqft
+                              </div>
+                              <div className="text-base font-semibold leading-tight">
+                                {formatNumber(candidate.livingSqft) ?? "-"}
+                              </div>
+                            </div>
+                            <div className="rounded-md border border-border bg-background px-3 py-2">
+                              <div className="text-[11px] font-medium uppercase text-muted-foreground">
+                                Acres
+                              </div>
+                              <div className="text-base font-semibold leading-tight">
+                                {candidate.lotAcres ?? "-"}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-3 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                            <span className="font-medium text-foreground">
+                              {alertProviderLabel}
+                            </span>
                             <span>{formatDateTime(provenance.receivedAt)}</span>
-                            {provenance.from ? (
-                              <span>{provenance.from}</span>
-                            ) : null}
                             {provenance.messageSubject ? (
-                              <span className="block max-w-[28rem] truncate">
+                              <span className="block max-w-[32rem] truncate">
                                 {provenance.messageSubject}
                               </span>
                             ) : null}
-                            {scorePreview ? (
-                              <span>{scorePreview.evaluation.scoreLabel}</span>
-                            ) : null}
                           </div>
-                          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-                            <span>{formatCurrency(candidate.askingPrice)}</span>
-                            <span>
-                              {candidate.bedrooms ?? "-"} bd /{" "}
-                              {candidate.bathrooms ?? "-"} ba
-                            </span>
-                            <span>
-                              {candidate.livingSqft
-                                ? `${candidate.livingSqft.toLocaleString()} sqft`
-                                : "Sqft unknown"}
-                            </span>
-                            <span>
-                              {candidate.lotAcres
-                                ? `${candidate.lotAcres} acres`
-                                : "Acreage unknown"}
-                            </span>
-                          </div>
-                          <p className="mt-3 line-clamp-3 max-w-5xl text-sm text-muted-foreground">
+                          <p className="mt-2 line-clamp-2 max-w-5xl text-sm text-muted-foreground">
                             {candidate.listingRemarks || candidate.rawText}
                           </p>
                           <div className="mt-3 flex flex-wrap gap-2">
@@ -1332,7 +1622,7 @@ export function ListingAlertManager() {
                         </div>
                       </div>
 
-                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                      <div className="flex min-w-0 flex-wrap items-center gap-2 xl:max-w-64 xl:justify-end">
                         {candidate.listingUrl ? (
                           <Button
                             type="button"
@@ -1348,6 +1638,21 @@ export function ListingAlertManager() {
                               <Inbox aria-hidden="true" />
                               Open
                             </a>
+                          </Button>
+                        ) : null}
+                        {canEnrichCandidate(candidate) ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleEnrichCandidates([candidate])}
+                            disabled={isEnrichingCandidate}
+                          >
+                            <Sparkles
+                              aria-hidden="true"
+                              className={cn(isEnrichingCandidate && "animate-spin")}
+                            />
+                            Enrich
                           </Button>
                         ) : null}
                         <Button

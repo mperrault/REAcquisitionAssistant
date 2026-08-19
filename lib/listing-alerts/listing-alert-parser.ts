@@ -229,7 +229,7 @@ function defaultCreateId() {
 }
 
 function cleanUrl(value: string) {
-  return value.replace(/[),.;]+$/g, "");
+  return value.replace(/[\]),.;]+$/g, "");
 }
 
 function normalizeUrl(value: string) {
@@ -309,16 +309,110 @@ function getHtmlSearchVariants(html: string) {
   ).filter((variant) => variant.trim());
 }
 
+function htmlToText(value: string) {
+  return normalizeText(
+    decodeEscapedHtmlValue(value)
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(?:p|div|article|tr|td|h\d|li)>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+  );
+}
+
+function getImageForwardCardText(html: string, index: number) {
+  const nextImageMatch = html.slice(index + 1).match(/<img\b/i);
+  const end =
+    nextImageMatch?.index === undefined
+      ? Math.min(html.length, index + 4000)
+      : index + 1 + nextImageMatch.index;
+
+  return htmlToText(html.slice(index, end));
+}
+
+function getContainingElementRange(html: string, index: number, tagName: string) {
+  const escapedTagName = tagName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const openMatches = Array.from(
+    html.slice(0, index + 1).matchAll(new RegExp(`<${escapedTagName}\\b[^>]*>`, "gi"))
+  );
+  const openMatch = openMatches.pop();
+
+  if (!openMatch?.[0] || openMatch.index === undefined) {
+    return null;
+  }
+
+  const closeMatch = html
+    .slice(index)
+    .match(new RegExp(`</${escapedTagName}>`, "i"));
+
+  if (!closeMatch?.[0] || closeMatch.index === undefined) {
+    return null;
+  }
+
+  const start = openMatch.index;
+  const end = index + closeMatch.index + closeMatch[0].length;
+
+  return { start, end, html: html.slice(start, end) };
+}
+
+function getTableCells(rowHtml: string) {
+  return Array.from(rowHtml.matchAll(/<td\b[^>]*>[\s\S]*?<\/td>/gi)).map(
+    (match) => match[0]
+  );
+}
+
+function getColumnAlignedDetailContext(html: string, index: number) {
+  const row = getContainingElementRange(html, index, "tr");
+  const cell = getContainingElementRange(html, index, "td");
+
+  if (!row || !cell) {
+    return "";
+  }
+
+  const imageCells = getTableCells(row.html);
+
+  if (imageCells.length <= 1) {
+    return "";
+  }
+
+  const cellIndex = getTableCells(html.slice(row.start, cell.end)).length - 1;
+
+  if (cellIndex < 0) {
+    return "";
+  }
+
+  const nextRowMatch = html.slice(row.end).match(/<tr\b[^>]*>[\s\S]*?<\/tr>/i);
+
+  if (!nextRowMatch?.[0]) {
+    return "";
+  }
+
+  const detailCell = getTableCells(nextRowMatch[0])[cellIndex] ?? "";
+
+  if (!detailCell) {
+    return "";
+  }
+
+  const detailText = htmlToText(detailCell);
+
+  return hasAddressLikeText(detailText) || extractPrice(detailText) !== null
+    ? detailText
+    : "";
+}
+
+function hasAddressLikeText(value: string) {
+  const addressLikePattern = new RegExp(
+    `${streetNumberPatternSource}\\s+[^<]{1,80}\\b${streetSuffixPatternSource}\\b`,
+    "i"
+  );
+
+  return addressLikePattern.test(value) || addressLikePattern.test(htmlToText(value));
+}
+
 function getNearbyImageContainerContext(html: string, index: number, tag: string) {
   const before = html.slice(0, index);
   const openMatches = Array.from(
     before.matchAll(/<(article|tr|td|div|a)\b[^>]*>/gi)
   ).reverse();
   let fallbackContext = "";
-  const addressLikePattern = new RegExp(
-    `${streetNumberPatternSource}\\s+[^<]{1,80}\\b${streetSuffixPatternSource}\\b`,
-    "i"
-  );
 
   for (const openMatch of openMatches) {
     if (!openMatch?.[0] || openMatch.index === undefined) {
@@ -343,7 +437,7 @@ function getNearbyImageContainerContext(html: string, index: number, tag: string
 
     fallbackContext ||= context;
 
-    if (addressLikePattern.test(context)) {
+    if (hasAddressLikeText(context)) {
       return context;
     }
   }
@@ -375,17 +469,37 @@ function getImageCandidatesFromHtml(html: string) {
         getHtmlAttribute(tag, "title"),
         getHtmlAttribute(tag, "aria-label")
       ].filter(Boolean);
+      const forwardCardText = getImageForwardCardText(
+        htmlVariant,
+        match.index ?? 0
+      );
+      const columnDetailContext = getColumnAlignedDetailContext(
+        htmlVariant,
+        match.index ?? 0
+      );
+      const containerContext = getNearbyImageContainerContext(
+        htmlVariant,
+        match.index ?? 0,
+        tag
+      );
       const context =
         semanticLabels.length > 0
           ? [tag, ...semanticLabels].join(" ")
-          : getNearbyImageContainerContext(htmlVariant, match.index ?? 0, tag);
+          : columnDetailContext
+            ? [containerContext, columnDetailContext].join(" ")
+          : hasAddressLikeText(containerContext)
+            ? containerContext
+            : [containerContext, forwardCardText].join(" ");
       const supplementalText = [
-        getNearbyImageContainerContext(htmlVariant, match.index ?? 0, tag),
+        containerContext,
+        columnDetailContext,
+        forwardCardText,
         getNearbyHtmlContext(htmlVariant, match.index ?? 0, tag.length)
       ].join(" ");
-      const supplementalPrice = extractPrice(
-        getNearbyImageContainerContext(htmlVariant, match.index ?? 0, tag)
-      );
+      const supplementalPrice =
+        extractPrice(columnDetailContext) ??
+        extractPrice(forwardCardText) ??
+        extractPrice(containerContext);
 
       for (const attributeName of [
         "src",
@@ -628,6 +742,41 @@ function normalizeComparableText(value: string) {
     .trim();
 }
 
+function normalizeComparableUrlKey(value: string) {
+  const cleanedValue = decodeEscapedHtmlValue(value)
+    .replace(/&amp;/gi, "&")
+    .replace(/\\u002F/gi, "/")
+    .replace(/\\\//g, "/")
+    .replace(/[\]\s"'<>]+.*$/, "")
+    .replace(/[.,;:]+$/, "");
+
+  try {
+    const parsedUrl = new URL(cleanedValue);
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const pathParts = parsedUrl.pathname.split("/").filter(Boolean);
+
+    if (
+      hostname === "e.e.mail.realtor.com" &&
+      pathParts[0] === "c2" &&
+      pathParts.length >= 4
+    ) {
+      return `${hostname}:${pathParts[pathParts.length - 1].toLowerCase()}`;
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
+}
+
+function extractComparableUrlKeys(value: string) {
+  const separatedValue = value.replace(/\](https?:\/\/)/gi, "] $1");
+
+  return Array.from(separatedValue.matchAll(htmlUrlPattern))
+    .map((match) => normalizeComparableUrlKey(match[0]))
+    .filter(Boolean);
+}
+
 function scorePhotoBlockMatch(
   block: string,
   address: ReturnType<typeof extractAddress>,
@@ -644,7 +793,15 @@ function scorePhotoBlockMatch(
   const cityState = normalizeComparableText(
     [address.city, address.state].filter(Boolean).join(" ")
   );
+  const photoUrlKeys = new Set(extractComparableUrlKeys(photo.context));
   let score = 0;
+  const hasAddressLine = Boolean(addressLine);
+
+  if (
+    extractComparableUrlKeys(block).some((urlKey) => photoUrlKeys.has(urlKey))
+  ) {
+    score += 120;
+  }
 
   if (fullAddress && normalizedContext.includes(fullAddress)) {
     score += 100;
@@ -660,6 +817,10 @@ function scorePhotoBlockMatch(
     normalizedContext.includes(addressLine)
   ) {
     score += 30;
+  }
+
+  if (hasAddressLine && score === 0) {
+    return 0;
   }
 
   if (cityState && normalizedContext.includes(cityState)) {
@@ -688,12 +849,29 @@ function selectPhotosForBlock(
     }))
     .filter((match) => match.score > 0)
     .sort((a, b) => b.score - a.score || a.photo.order - b.photo.order);
+  const fallbackPhotos = photoCandidates
+    .filter((photo) => !usedPhotoKeys.has(photo.key))
+    .filter(
+      (photo) =>
+        !hasAddressLikeText(`${photo.context} ${photo.supplementalText}`) ||
+        scorePhotoBlockMatch(normalizedBlock, address, photo) > 0
+    );
 
   return scoredMatches.length > 0
     ? [scoredMatches[0].photo]
-    : photoCandidates
-        .filter((photo) => !usedPhotoKeys.has(photo.key))
-        .slice(0, 1);
+    : fallbackPhotos.slice(0, 1);
+}
+
+function extractPhotoUrlsFromBlock(block: string) {
+  const separatedBlock = block.replace(/\](https?:\/\/)/gi, "] $1");
+
+  return Array.from(
+    new Set(
+      extractUrls(separatedBlock)
+        .map(normalizeImageUrl)
+        .filter((url) => url && isLikelyPropertyPhotoUrl(url, block))
+    )
+  );
 }
 
 function getMissingPhotoWarning(
@@ -796,11 +974,50 @@ function extractZillowListingBlocks(text: string) {
   });
 }
 
+function extractRealtorListingBlocks(text: string) {
+  if (!/realtor\.com|rdcpix\.com/i.test(text)) {
+    return [];
+  }
+
+  const lines = getMeaningfulLines(text);
+  const cardStartIndexes = lines
+    .map((line, index) => ({ line, index }))
+    .filter(
+      ({ line }) =>
+        /https:\/\/ap\.rdcpix\.com\/[^\s\]]+\.(?:jpe?g|png|webp)/i.test(
+          line
+        ) && /https:\/\/e\.e\.mail\.realtor\.com\/c2\//i.test(line)
+    )
+    .map(({ index }) => index);
+
+  if (cardStartIndexes.length === 0) {
+    return [];
+  }
+
+  return cardStartIndexes
+    .map((startIndex, index) => {
+      const nextStartIndex = cardStartIndexes[index + 1] ?? lines.length;
+
+      return lines.slice(startIndex, nextStartIndex).join("\n");
+    })
+    .filter((block) => {
+      const address = extractAddress(block);
+
+      return Boolean(address.addressLine1 || extractPrice(block) !== null);
+    });
+}
+
 function splitCandidateBlocks(text: string) {
   const providerBlocks = extractZillowListingBlocks(text);
 
   if (providerBlocks.length > 0) {
     return providerBlocks;
+  }
+
+  const realtorBlocks = extractRealtorListingBlocks(text);
+
+  if (realtorBlocks.length > 0) {
+    return realtorBlocks;
   }
 
   const paragraphBlocks = text
@@ -1005,11 +1222,13 @@ function extractMlsId(text: string) {
 }
 
 function extractAddress(text: string) {
+  const normalizeAddressLine = (value: string) =>
+    value.trim().replace(/\s+/g, " ");
   const fullAddressMatch = text.match(fullAddressPattern);
 
   if (fullAddressMatch?.[1] && fullAddressMatch[2] && fullAddressMatch[3]) {
     return {
-      addressLine1: fullAddressMatch[1].trim(),
+      addressLine1: normalizeAddressLine(fullAddressMatch[1]),
       city: fullAddressMatch[2].trim(),
       state: fullAddressMatch[3].toUpperCase(),
       postalCode: fullAddressMatch[4] ?? ""
@@ -1022,7 +1241,7 @@ function extractAddress(text: string) {
 
   if (oneLineMatch?.[1] && oneLineMatch[2] && oneLineMatch[3]) {
     return {
-      addressLine1: oneLineMatch[1].trim(),
+      addressLine1: normalizeAddressLine(oneLineMatch[1]),
       city: oneLineMatch[2].trim(),
       state: oneLineMatch[3].toUpperCase(),
       postalCode: oneLineMatch[4] ?? ""
@@ -1038,7 +1257,9 @@ function extractAddress(text: string) {
   );
 
   if (addressLineIndex >= 0) {
-    const addressLine1 = lines[addressLineIndex].replace(/,$/, "");
+    const addressLine1 = normalizeAddressLine(
+      lines[addressLineIndex].replace(/,$/, "")
+    );
     const nextLine = lines[addressLineIndex + 1] ?? "";
     const cityStateMatch = nextLine.match(
       /^([A-Za-z .'-]+),?\s+([A-Z]{2})\s*(\d{5}(?:-\d{4})?)?$/i
@@ -1347,7 +1568,12 @@ export function parseListingAlertText(input: string, options: ParseOptions = {})
       photoCandidates,
       usedPhotoKeys
     );
-    const candidatePhotoUrls = candidatePhotos.map((photo) => photo.url);
+    const candidatePhotoUrls = Array.from(
+      new Set([
+        ...extractPhotoUrlsFromBlock(block),
+        ...candidatePhotos.map((photo) => photo.url)
+      ])
+    );
     const candidate = parseCandidateBlock(
       block,
       options,
