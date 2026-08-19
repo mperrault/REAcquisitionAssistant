@@ -222,8 +222,89 @@ function createPropertyEnrichmentCandidate(property: PropertyRecord) {
     postalCode: property.postalCode,
     askingPrice: property.askingPrice,
     primaryPhotoUrl: property.primaryPhotoUrl,
-    photoUrls: property.photoUrls
+    photoUrls: property.photoUrls,
+    houseStyle: property.houseStyle,
+    listingRemarks: property.listingRemarks,
+    inferStyle: true
   };
+}
+
+function upsertInferredStyleFact(
+  facts: PropertyFact[],
+  factKey: string,
+  label: string,
+  confidence: number | null,
+  sourceReference: string,
+  observedAt: string
+) {
+  if (!factKey) {
+    return facts;
+  }
+
+  const existingFact = facts.find((fact) => fact.factKey === factKey);
+  const nextFact = {
+    ...(existingFact ??
+      createPropertyFact({
+        factKey,
+        label,
+        value: true,
+        sourceType: "ai_inferred",
+        sourceReference
+      })),
+    label,
+    value: true,
+    sourceType: "ai_inferred" as const,
+    sourceReference,
+    confidence,
+    verified: false,
+    observedAt
+  };
+
+  if (existingFact) {
+    return facts.map((fact) => (fact.id === existingFact.id ? nextFact : fact));
+  }
+
+  return [...facts, nextFact];
+}
+
+function upsertSourcedTextFact(
+  facts: PropertyFact[],
+  factKey: string,
+  label: string,
+  value: string,
+  sourceReference: string,
+  observedAt: string
+) {
+  const textValue = value.trim();
+
+  if (!textValue) {
+    return facts.filter((fact) => fact.factKey !== factKey);
+  }
+
+  const existingFact = facts.find((fact) => fact.factKey === factKey);
+  const nextFact = {
+    ...(existingFact ??
+      createPropertyFact({
+        factKey,
+        label,
+        value: textValue,
+        sourceType: "api",
+        sourceReference
+      })),
+    label,
+    value: textValue,
+    sourceType: "api" as const,
+    sourceReference,
+    confidence: 0.8,
+    verified: false,
+    observedAt
+  };
+
+  if (existingFact) {
+    return facts.map((fact) => (fact.id === existingFact.id ? nextFact : fact));
+  }
+
+  return [...facts, nextFact];
 }
 
 function mergeEnrichmentIntoProperty(
@@ -244,6 +325,31 @@ function mergeEnrichmentIntoProperty(
       ...property.photoUrls
     ])
   );
+  const shouldApplyStyle =
+    !property.houseStyle.trim() && Boolean(enrichment.updates.houseStyle);
+  const facts = shouldApplyStyle
+    ? upsertInferredStyleFact(
+        property.facts.filter((fact) => fact.factKey !== "style.inference_error"),
+        enrichment.updates.styleFactKey,
+        enrichment.updates.houseStyle,
+        enrichment.updates.styleConfidence,
+        enrichment.updates.styleEvidence ||
+          `Inferred from ${enrichment.updates.styleSource}`,
+        enrichment.fetchedAt
+      )
+    : !property.houseStyle.trim()
+      ? upsertSourcedTextFact(
+          property.facts,
+          "style.inference_error",
+          "House style inference issue",
+          enrichment.warnings
+            .filter((warning) => warning.toLowerCase().includes("style"))
+            .join(" ") || "Enrichment did not identify a house style.",
+          "Listing enrichment",
+          enrichment.fetchedAt
+        )
+      : property.facts;
+  const changed = shouldApplyPrice || shouldApplyPhoto || shouldApplyStyle;
 
   return {
     property: refreshInvestmentFacts({
@@ -253,15 +359,17 @@ function mergeEnrichmentIntoProperty(
         : property.askingPrice,
       primaryPhotoUrl,
       photoUrls,
-      updatedAt:
-        shouldApplyPrice || shouldApplyPhoto
-          ? enrichment.fetchedAt
-          : property.updatedAt
+      houseStyle: shouldApplyStyle
+        ? enrichment.updates.houseStyle
+        : property.houseStyle,
+      facts,
+      updatedAt: changed ? enrichment.fetchedAt : property.updatedAt
     }),
-    changed: shouldApplyPrice || shouldApplyPhoto,
+    changed,
     appliedFields: [
       shouldApplyPrice ? "price" : null,
-      shouldApplyPhoto ? "photo" : null
+      shouldApplyPhoto ? "photo" : null,
+      shouldApplyStyle ? "style" : null
     ].filter(Boolean) as string[]
   };
 }
@@ -329,9 +437,22 @@ function mergeDriveTimeIntoProperty(
   driveTime: ReturnType<typeof calculateDriveTimeResponseSchema.parse>
 ) {
   if (property.id !== driveTime.propertyId || driveTime.driveTimeMinutes === null) {
+    const warning = driveTime.warnings.join(" ") || "Drive time was not calculated.";
+
     return {
-      property,
-      changed: false
+      property: {
+        ...property,
+        facts: upsertSourcedTextFact(
+          property.facts,
+          "location.drive_time_error",
+          "Drive time calculation issue",
+          warning,
+          "Drive time calculation",
+          driveTime.calculatedAt
+        ),
+        updatedAt: driveTime.calculatedAt
+      },
+      changed: true
     };
   }
 
@@ -340,7 +461,7 @@ function mergeDriveTimeIntoProperty(
       ? `${driveTime.origin.label} to ${driveTime.destination.label}`
       : "Calculated commute route";
   let facts = upsertSourcedNumberFact(
-    property.facts,
+    property.facts.filter((fact) => fact.factKey !== "location.drive_time_error"),
     "location.drive_time_minutes",
     "Drive time",
     driveTime.driveTimeMinutes,
@@ -691,19 +812,61 @@ export function PropertyManager() {
 
       const enrichment = listingCandidateEnrichmentResponseSchema.parse(payload);
       const merged = mergeEnrichmentIntoProperty(draft, enrichment);
-      const nextPropertyState = upsertProperty(propertyState, merged.property);
+      let enrichedProperty = merged.property;
+      const appliedFields = [...merged.appliedFields];
+      const warnings = [...enrichment.warnings];
+
+      if (activeProfile && canCalculateDriveTime(enrichedProperty, activeProfile)) {
+        const driveTimeResponse = await fetch(
+          "/api/properties/calculate-drive-time",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(
+              createDriveTimeRequest(enrichedProperty, activeProfile)
+            )
+          }
+        );
+        const driveTimePayload = await driveTimeResponse.json();
+
+        if (driveTimeResponse.ok) {
+          const driveTime =
+            calculateDriveTimeResponseSchema.parse(driveTimePayload);
+          const driveTimeMerge = mergeDriveTimeIntoProperty(
+            enrichedProperty,
+            driveTime
+          );
+
+          enrichedProperty = driveTimeMerge.property;
+
+          if (driveTime.driveTimeMinutes !== null) {
+            appliedFields.push("drive time");
+          }
+
+          warnings.push(...driveTime.warnings);
+        } else if (
+          driveTimePayload &&
+          typeof driveTimePayload.error === "string"
+        ) {
+          warnings.push(driveTimePayload.error);
+        }
+      }
+
+      const nextPropertyState = upsertProperty(propertyState, enrichedProperty);
       const persistedState = savePropertyState(
         window.localStorage,
         nextPropertyState
       );
 
       setPropertyState(persistedState);
-      setDraft(cloneProperty(merged.property));
-      setSelectedPropertyId(merged.property.id);
+      setDraft(cloneProperty(enrichedProperty));
+      setSelectedPropertyId(enrichedProperty.id);
       setLoadSource("storage");
 
       if (activeProfile) {
-        const evaluation = evaluateProperty(merged.property, activeProfile);
+        const evaluation = evaluateProperty(enrichedProperty, activeProfile);
         const nextScoreState = addScoreEvaluation(scoreState, evaluation);
         const persistedScores = saveScoreState(
           window.localStorage,
@@ -715,15 +878,15 @@ export function PropertyManager() {
       }
 
       const warningSuffix =
-        enrichment.warnings.length > 0
-          ? ` (${enrichment.warnings.length} warning${
-              enrichment.warnings.length === 1 ? "" : "s"
+        warnings.length > 0
+          ? ` (${warnings.length} warning${
+              warnings.length === 1 ? "" : "s"
             })`
           : "";
 
       setSaveStatus(
-        merged.changed
-          ? `Enriched ${merged.appliedFields.join(", ")}${warningSuffix}`
+        appliedFields.length > 0
+          ? `Enriched ${Array.from(new Set(appliedFields)).join(", ")}${warningSuffix}`
           : `No new data${warningSuffix}`
       );
     } catch (error) {
@@ -761,16 +924,6 @@ export function PropertyManager() {
 
       const driveTime = calculateDriveTimeResponseSchema.parse(payload);
       const merged = mergeDriveTimeIntoProperty(draft, driveTime);
-
-      if (!merged.changed) {
-        setSaveStatus(
-          driveTime.warnings.length > 0
-            ? driveTime.warnings.join(" ")
-            : "No drive time calculated"
-        );
-        return;
-      }
-
       const nextPropertyState = upsertProperty(propertyState, merged.property);
       const persistedState = savePropertyState(
         window.localStorage,
@@ -786,15 +939,23 @@ export function PropertyManager() {
       setScoreState(persistedScores);
       setLoadSource("storage");
       setActiveTab("scoring");
-      setSaveStatus(
-        `Drive time ${driveTime.driveTimeMinutes} min${
+      if (driveTime.driveTimeMinutes === null) {
+        setSaveStatus(
           driveTime.warnings.length > 0
-            ? ` (${driveTime.warnings.length} warning${
-                driveTime.warnings.length === 1 ? "" : "s"
-              })`
-            : ""
-        }`
-      );
+            ? driveTime.warnings.join(" ")
+            : "No drive time calculated"
+        );
+      } else {
+        setSaveStatus(
+          `Drive time ${driveTime.driveTimeMinutes} min${
+            driveTime.warnings.length > 0
+              ? ` (${driveTime.warnings.length} warning${
+                  driveTime.warnings.length === 1 ? "" : "s"
+                })`
+              : ""
+          }`
+        );
+      }
     } catch (error) {
       setSaveStatus(
         error instanceof Error ? error.message : "Drive time calculation failed"

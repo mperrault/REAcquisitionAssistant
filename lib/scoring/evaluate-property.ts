@@ -78,6 +78,10 @@ function asNumber(value: FactValue | undefined) {
   return null;
 }
 
+function asString(value: FactValue | undefined) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 function createFactIndex(property: PropertyRecord): FactIndex {
   const facts = new Map<string, FactValue>();
 
@@ -231,7 +235,32 @@ function evaluateLocation(
   const driveTime = asNumber(facts.get("location.drive_time_minutes"));
 
   if (driveTime === null) {
-    missingData.push("Drive time is missing for commute scoring.");
+    const driveTimeError = asString(facts.get("location.drive_time_error"));
+    const hasCommuteAnchor =
+      Boolean(profile.commute.anchorAddress.trim()) ||
+      (profile.commute.anchorLat !== null && profile.commute.anchorLng !== null);
+    const hasPropertyAddress = Boolean(
+      property.addressLine1.trim() && property.city.trim() && property.state.trim()
+    );
+
+    if (driveTimeError) {
+      missingData.push(
+        `Drive time is missing for commute scoring: ${driveTimeError}`
+      );
+    } else if (!hasCommuteAnchor) {
+      missingData.push(
+        "Drive time is missing for commute scoring because the active profile has no commute anchor address or coordinates."
+      );
+    } else if (!hasPropertyAddress) {
+      missingData.push(
+        "Drive time is missing for commute scoring because the property address is incomplete."
+      );
+    } else {
+      missingData.push(
+        "Drive time is missing for commute scoring. Run Drive Time or Enrich to calculate it from the active profile commute anchor."
+      );
+    }
+
     return;
   }
 
@@ -449,8 +478,19 @@ function evaluateFeaturePreferences(
     (preference) => preference.category === "style" && preference.mode === "bonus"
   );
 
-  if (hasStylePreferences && ![...facts.keys()].some((key) => key.startsWith("style."))) {
-    missingData.push("House style is missing.");
+  const hasStyleFacts = enabledFeatures.some(
+    (preference) =>
+      preference.category === "style" &&
+      preference.mode === "bonus" &&
+      isTruthyFact(facts.get(preference.featureKey) ?? null)
+  );
+
+  if (hasStylePreferences && !hasStyleFacts) {
+    const styleError = asString(facts.get("style.inference_error"));
+
+    missingData.push(
+      styleError ? `House style is missing: ${styleError}` : "House style is missing."
+    );
   }
 
   const hasRenovationPreferences = enabledFeatures.some(

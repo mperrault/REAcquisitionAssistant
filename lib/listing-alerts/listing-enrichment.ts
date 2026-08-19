@@ -11,7 +11,10 @@ const requestCandidateSchema = z.object({
   postalCode: z.string(),
   askingPrice: z.number().int().nonnegative().nullable(),
   primaryPhotoUrl: z.string(),
-  photoUrls: z.array(z.string())
+  photoUrls: z.array(z.string()),
+  houseStyle: z.string().default(""),
+  listingRemarks: z.string().default(""),
+  inferStyle: z.boolean().default(false)
 });
 
 export const listingCandidateEnrichmentRequestSchema = z.object({
@@ -25,7 +28,12 @@ export const listingCandidateEnrichmentResponseSchema = z.object({
   updates: z.object({
     askingPrice: z.number().int().nonnegative().nullable(),
     primaryPhotoUrl: z.string(),
-    photoUrls: z.array(z.string())
+    photoUrls: z.array(z.string()),
+    houseStyle: z.string(),
+    styleFactKey: z.string(),
+    styleConfidence: z.number().min(0).max(1).nullable(),
+    styleEvidence: z.string(),
+    styleSource: z.enum(["", "listing_text", "photo_inference"])
   }),
   warnings: z.array(z.string())
 });
@@ -37,7 +45,7 @@ export type ListingCandidateEnrichmentResponse = z.infer<
 type FetchLike = (
   input: string,
   init?: RequestInit
-) => Promise<Pick<Response, "ok" | "status" | "text">>;
+) => Promise<Pick<Response, "ok" | "status" | "text" | "json">>;
 
 type Metadata = {
   askingPrice: number | null;
@@ -45,8 +53,73 @@ type Metadata = {
   pageText: string;
 };
 
+type StyleInference = {
+  houseStyle: string;
+  styleFactKey: string;
+  confidence: number;
+  evidence: string;
+  source: "listing_text" | "photo_inference";
+};
+
+const styleDefinitions = [
+  {
+    houseStyle: "Cape",
+    styleFactKey: "style.cape",
+    patterns: [/\bcape cod\b/i, /\bcape\b/i]
+  },
+  {
+    houseStyle: "Cottage",
+    styleFactKey: "style.cottage",
+    patterns: [/\bcottage\b/i, /\bbungalow\b/i]
+  },
+  {
+    houseStyle: "Farmhouse",
+    styleFactKey: "style.farmhouse",
+    patterns: [/\bfarmhouse\b/i, /\bfarm house\b/i]
+  },
+  {
+    houseStyle: "Ranch",
+    styleFactKey: "style.ranch",
+    patterns: [/\branch\b/i, /\bone[-\s]level\b/i]
+  },
+  {
+    houseStyle: "Colonial",
+    styleFactKey: "style.colonial",
+    patterns: [/\bcolonial\b/i]
+  },
+  {
+    houseStyle: "Contemporary",
+    styleFactKey: "style.contemporary",
+    patterns: [/\bcontemporary\b/i, /\bmodern\b/i]
+  },
+  {
+    houseStyle: "Log Home",
+    styleFactKey: "style.log_home",
+    patterns: [/\blog home\b/i, /\blog cabin\b/i]
+  }
+] as const;
+
 function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function getStyleUpdate(style: StyleInference | null) {
+  return {
+    houseStyle: style?.houseStyle ?? "",
+    styleFactKey: style?.styleFactKey ?? "",
+    styleConfidence: style?.confidence ?? null,
+    styleEvidence: style?.evidence ?? "",
+    styleSource: style?.source ?? ""
+  };
+}
+
+function emptyUpdates() {
+  return {
+    askingPrice: null,
+    primaryPhotoUrl: "",
+    photoUrls: [],
+    ...getStyleUpdate(null)
+  };
 }
 
 function decodeHtmlEntities(value: string) {
@@ -117,6 +190,213 @@ function isLikelyListingImageUrl(value: string) {
     !normalized.endsWith(".svg") &&
     /\.(?:jpe?g|png|webp)(?:[?#].*)?$/i.test(normalized)
   );
+}
+
+function isEligibleVisionImageUrl(value: string) {
+  try {
+    const url = new URL(value);
+
+    return (
+      ["http:", "https:"].includes(url.protocol) &&
+      !isBlockedFetchHost(url) &&
+      isLikelyListingImageUrl(value)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getTextEvidence(text: string, pattern: RegExp) {
+  const match = text.match(pattern);
+
+  if (!match?.index) {
+    return match?.[0] ?? "";
+  }
+
+  const start = Math.max(0, match.index - 50);
+  const end = Math.min(text.length, match.index + match[0].length + 50);
+
+  return normalizeText(text.slice(start, end));
+}
+
+function inferHouseStyleFromText(text: string): StyleInference | null {
+  const normalized = normalizeText(text);
+
+  if (!normalized) {
+    return null;
+  }
+
+  for (const definition of styleDefinitions) {
+    for (const pattern of definition.patterns) {
+      if (pattern.test(normalized)) {
+        return {
+          houseStyle: definition.houseStyle,
+          styleFactKey: definition.styleFactKey,
+          confidence: 0.85,
+          evidence: getTextEvidence(normalized, pattern),
+          source: "listing_text"
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseStyleLabel(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+
+  return (
+    styleDefinitions.find((definition) =>
+      [
+        definition.houseStyle.toLowerCase(),
+        definition.styleFactKey.replace("style.", "").replace(/_/g, " ")
+      ].includes(normalized)
+    ) ?? null
+  );
+}
+
+function extractResponseOutputText(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const record = payload as Record<string, unknown>;
+
+  if (typeof record.output_text === "string") {
+    return record.output_text;
+  }
+
+  const output = record.output;
+
+  if (!Array.isArray(output)) {
+    return "";
+  }
+
+  return output
+    .flatMap((item) => {
+      if (!item || typeof item !== "object") {
+        return [];
+      }
+
+      const content = (item as Record<string, unknown>).content;
+
+      if (!Array.isArray(content)) {
+        return [];
+      }
+
+      return content
+        .map((part) =>
+          part && typeof part === "object"
+            ? (part as Record<string, unknown>).text
+            : null
+        )
+        .filter((part): part is string => typeof part === "string");
+    })
+    .join(" ");
+}
+
+function parseVisionStyleInference(text: string): StyleInference | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+    const definition = parseStyleLabel(parsed.houseStyle);
+    const confidence =
+      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : 0;
+
+    if (!definition || confidence < 0.55) {
+      return null;
+    }
+
+    return {
+      houseStyle: definition.houseStyle,
+      styleFactKey: definition.styleFactKey,
+      confidence,
+      evidence:
+        typeof parsed.evidence === "string"
+          ? normalizeText(parsed.evidence).slice(0, 240)
+          : "Exterior photo inference",
+      source: "photo_inference"
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function inferHouseStyleFromPhotos(
+  photoUrls: string[],
+  fetcher: FetchLike
+): Promise<{ style: StyleInference | null; warning: string | null }> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const imageUrls = Array.from(new Set(photoUrls.filter(isEligibleVisionImageUrl)))
+    .slice(0, 3);
+
+  if (imageUrls.length === 0) {
+    return { style: null, warning: "No eligible exterior photo URL for style inference." };
+  }
+
+  if (!apiKey) {
+    return {
+      style: null,
+      warning: "Photo style inference skipped because OPENAI_API_KEY is not configured."
+    };
+  }
+
+  const response = await fetcher("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_VISION_MODEL?.trim() || "gpt-5-mini",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "Classify the likely exterior house style from these real-estate photos. " +
+                "Choose exactly one of: Cape, Cottage, Farmhouse, Ranch, Colonial, Contemporary, Log Home. " +
+                "If uncertain, return confidence below 0.55. Return only JSON with keys houseStyle, confidence, evidence."
+            },
+            ...imageUrls.map((imageUrl) => ({
+              type: "input_image",
+              image_url: imageUrl,
+              detail: "low"
+            }))
+          ]
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    return {
+      style: null,
+      warning: `Photo style inference failed with HTTP ${response.status}.`
+    };
+  }
+
+  const style = parseVisionStyleInference(extractResponseOutputText(await response.json()));
+
+  return {
+    style,
+    warning: style ? null : "Photo style inference did not return a confident style."
+  };
 }
 
 function collectImageUrls(value: unknown, urls: string[]) {
@@ -315,7 +595,13 @@ export async function enrichListingCandidate(
     | "askingPrice"
     | "primaryPhotoUrl"
     | "photoUrls"
-  >,
+  > &
+    Partial<
+      Pick<
+        z.infer<typeof requestCandidateSchema>,
+        "houseStyle" | "listingRemarks" | "inferStyle"
+      >
+    >,
   fetcher: FetchLike = fetch
 ): Promise<ListingCandidateEnrichmentResponse> {
   const parsedCandidate = requestCandidateSchema.parse(candidate);
@@ -342,11 +628,7 @@ export async function enrichListingCandidate(
         candidateId: parsedCandidate.id,
         listingUrl,
         fetchedAt,
-        updates: {
-          askingPrice: null,
-          primaryPhotoUrl: "",
-          photoUrls: []
-        },
+        updates: emptyUpdates(),
         warnings
       });
     }
@@ -359,21 +641,48 @@ export async function enrichListingCandidate(
         candidateId: parsedCandidate.id,
         listingUrl,
         fetchedAt,
-        updates: {
-          askingPrice: null,
-          primaryPhotoUrl: "",
-          photoUrls: []
-        },
+        updates: emptyUpdates(),
         warnings
       });
     }
 
     const shouldFillPrice = parsedCandidate.askingPrice === null;
     const shouldFillPhoto = !parsedCandidate.primaryPhotoUrl;
+    const shouldFillStyle =
+      parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim();
+    const availablePhotoUrls = Array.from(
+      new Set([
+        ...metadata.photoUrls,
+        ...(parsedCandidate.primaryPhotoUrl
+          ? [parsedCandidate.primaryPhotoUrl]
+          : []),
+        ...parsedCandidate.photoUrls
+      ])
+    );
+    let style =
+      shouldFillStyle
+        ? inferHouseStyleFromText(
+            `${metadata.pageText} ${parsedCandidate.listingRemarks}`
+          )
+        : null;
+
+    if (shouldFillStyle && !style) {
+      const photoInference = await inferHouseStyleFromPhotos(
+        availablePhotoUrls,
+        fetcher
+      );
+      style = photoInference.style;
+
+      if (photoInference.warning) {
+        warnings.push(photoInference.warning);
+      }
+    }
+
     const updates = {
       askingPrice: shouldFillPrice ? metadata.askingPrice : null,
       primaryPhotoUrl: shouldFillPhoto ? (metadata.photoUrls[0] ?? "") : "",
-      photoUrls: shouldFillPhoto ? metadata.photoUrls : []
+      photoUrls: shouldFillPhoto ? metadata.photoUrls : [],
+      ...getStyleUpdate(style)
     };
 
     if (shouldFillPrice && updates.askingPrice === null) {
@@ -382,6 +691,10 @@ export async function enrichListingCandidate(
 
     if (shouldFillPhoto && !updates.primaryPhotoUrl) {
       warnings.push("Listing page did not expose a property photo.");
+    }
+
+    if (shouldFillStyle && !style) {
+      warnings.push("Listing page did not expose a house style.");
     }
 
     return listingCandidateEnrichmentResponseSchema.parse({
@@ -402,11 +715,7 @@ export async function enrichListingCandidate(
       candidateId: parsedCandidate.id,
       listingUrl,
       fetchedAt,
-      updates: {
-        askingPrice: null,
-        primaryPhotoUrl: "",
-        photoUrls: []
-      },
+      updates: emptyUpdates(),
       warnings
     });
   } finally {

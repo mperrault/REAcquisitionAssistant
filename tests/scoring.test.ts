@@ -277,12 +277,76 @@ describe("property scoring", () => {
     expect(evaluation.missingData).toEqual(
       expect.arrayContaining([
         "Town/state are missing for location scoring.",
-        "Drive time is missing for commute scoring.",
+        "Drive time is missing for commute scoring because the active profile has no commute anchor address or coordinates.",
         "Asking price or estimated purchase price is missing.",
         "Setting and view facts are missing.",
         "House style is missing.",
         "Renovation scope and expected cost are missing."
       ])
+    );
+  });
+
+  it("explains drive-time gaps when a route calculation failed", () => {
+    const profile = {
+      ...quietCornerSeedProfile,
+      commute: {
+        ...quietCornerSeedProfile.commute,
+        anchorAddress: "100 Main St, Stafford Springs, CT"
+      }
+    };
+    const property = createPropertyRecord({
+      id: "property-drive-error",
+      addressLine1: "175 W Stafford Rd",
+      city: "Stafford",
+      state: "CT",
+      postalCode: "06076",
+      facts: [
+        createPropertyFact({
+          id: "fact-drive-error",
+          factKey: "location.drive_time_error",
+          label: "Drive time calculation issue",
+          value: "No geocode result found for 175 W Stafford Rd."
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      profile,
+      "2026-08-10T22:16:00.000Z",
+      () => "score-drive-error"
+    );
+
+    expect(evaluation.missingData).toContain(
+      "Drive time is missing for commute scoring: No geocode result found for 175 W Stafford Rd."
+    );
+  });
+
+  it("explains style gaps when style inference failed", () => {
+    const property = createPropertyRecord({
+      id: "property-style-error",
+      city: "Stafford",
+      state: "CT",
+      facts: [
+        createPropertyFact({
+          id: "fact-style-error",
+          factKey: "style.inference_error",
+          label: "House style inference issue",
+          value:
+            "Photo style inference skipped because OPENAI_API_KEY is not configured."
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-08-10T22:17:00.000Z",
+      () => "score-style-error"
+    );
+
+    expect(evaluation.missingData).toContain(
+      "House style is missing: Photo style inference skipped because OPENAI_API_KEY is not configured."
     );
   });
 
