@@ -4,6 +4,7 @@ import Image from "next/image";
 import * as React from "react";
 import {
   CheckCircle2,
+  Circle,
   ImageOff,
   Inbox,
   Play,
@@ -78,7 +79,11 @@ import {
 } from "@/lib/properties/property-persistence";
 import type { PropertyState } from "@/lib/properties/types";
 import { loadProfileState } from "@/lib/profiles/profile-persistence";
-import type { ProfileState } from "@/lib/profiles/types";
+import type {
+  ProfileCategory,
+  ProfileState,
+  SearchProfile
+} from "@/lib/profiles/types";
 import { evaluateProperty } from "@/lib/scoring/evaluate-property";
 import {
   addScoreEvaluation,
@@ -88,6 +93,16 @@ import {
 } from "@/lib/scoring/score-persistence";
 import type { ScoreEvaluationState } from "@/lib/scoring/types";
 import { cn } from "@/lib/utils";
+
+type ScoreCoverageStatus = "known" | "missing" | "unknown";
+
+type ScoreCoverageItem = {
+  category: ProfileCategory;
+  label: string;
+  status: ScoreCoverageStatus;
+  gaps: string[];
+  title: string;
+};
 
 const sampleAlertText = `New listing alert
 
@@ -158,6 +173,18 @@ const sortOptions: Array<{ value: CandidateSortMode; label: string }> = [
   { value: "price_asc", label: "Lowest Price" },
   { value: "price_desc", label: "Highest Price" }
 ];
+
+const scoreCoverageLabels: Record<ProfileCategory, string> = {
+  location: "Loc",
+  setting: "Set",
+  style: "Style",
+  renovation: "Reno",
+  financial: "Fin",
+  resale: "Resale",
+  maintenance: "Maint",
+  risk: "Risk",
+  utility: "Util"
+};
 
 function formatCurrency(value: number | null) {
   if (value === null) {
@@ -332,6 +359,140 @@ function formatScoreGapTitle(missingData: string[]) {
   return missingData.length > 0
     ? `Missing scoring inputs:\n${missingData.join("\n")}`
     : "No score gaps";
+}
+
+function getScoreGapCategories(gap: string): ProfileCategory[] {
+  const value = gap.toLowerCase();
+  const categories = new Set<ProfileCategory>();
+
+  if (
+    value.includes("town") ||
+    value.includes("state") ||
+    value.includes("drive") ||
+    value.includes("commute")
+  ) {
+    categories.add("location");
+  }
+
+  if (
+    value.includes("setting") ||
+    value.includes("view") ||
+    value.includes("acreage") ||
+    value.includes("acres") ||
+    value.includes("lot")
+  ) {
+    categories.add("setting");
+  }
+
+  if (value.includes("style") || value.includes("house character")) {
+    categories.add("style");
+  }
+
+  if (value.includes("renovation")) {
+    categories.add("renovation");
+  }
+
+  if (
+    value.includes("price") ||
+    value.includes("purchase") ||
+    value.includes("financial") ||
+    value.includes("investment")
+  ) {
+    categories.add("financial");
+  }
+
+  if (value.includes("resale")) {
+    categories.add("resale");
+  }
+
+  if (value.includes("maintenance") || value.includes("garage")) {
+    categories.add("maintenance");
+  }
+
+  if (
+    value.includes("risk") ||
+    value.includes("hoa") ||
+    value.includes("flood") ||
+    value.includes("road")
+  ) {
+    categories.add("risk");
+  }
+
+  if (
+    value.includes("utility") ||
+    value.includes("heat") ||
+    value.includes("water") ||
+    value.includes("sewer") ||
+    value.includes("septic") ||
+    value.includes("well")
+  ) {
+    categories.add("utility");
+  }
+
+  return [...categories];
+}
+
+function getScoreCoverageItems(
+  profile: SearchProfile,
+  scorePreview: CandidateScorePreview
+): ScoreCoverageItem[] {
+  const evaluation = scorePreview.evaluation;
+  const missingByCategory = new Map<ProfileCategory, string[]>();
+
+  for (const gap of evaluation.missingData) {
+    for (const category of getScoreGapCategories(gap)) {
+      missingByCategory.set(category, [
+        ...(missingByCategory.get(category) ?? []),
+        gap
+      ]);
+    }
+  }
+
+  const knownCategories = new Set<ProfileCategory>();
+
+  for (const [category, points] of Object.entries(evaluation.categoryScores)) {
+    if (points > 0) {
+      knownCategories.add(category as ProfileCategory);
+    }
+  }
+
+  for (const item of [
+    ...evaluation.positiveFactors,
+    ...evaluation.penalties,
+    ...evaluation.hardRejectReasons
+  ]) {
+    knownCategories.add(item.category);
+  }
+
+  return profile.categoryWeights
+    .filter((category) => category.enabled && category.weight > 0)
+    .map((category): ScoreCoverageItem => {
+      const gaps = missingByCategory.get(category.categoryKey) ?? [];
+      const status: ScoreCoverageStatus =
+        gaps.length > 0
+          ? "missing"
+          : knownCategories.has(category.categoryKey)
+            ? "known"
+            : "unknown";
+      const statusLabel =
+        status === "known"
+          ? "Known"
+          : status === "missing"
+            ? "Needs enrichment"
+            : "No signal yet";
+      const title =
+        gaps.length > 0
+          ? `${category.categoryLabel}: ${statusLabel}\n${gaps.join("\n")}`
+          : `${category.categoryLabel}: ${statusLabel}`;
+
+      return {
+        category: category.categoryKey,
+        label: scoreCoverageLabels[category.categoryKey],
+        status,
+        gaps,
+        title
+      };
+    });
 }
 
 function cleanActionUrl(value: string) {
@@ -537,6 +698,80 @@ function Field({
     <div className="grid gap-2">
       <Label>{label}</Label>
       {children}
+    </div>
+  );
+}
+
+function CandidateScoreCoverage({
+  activeProfile,
+  scorePreview
+}: {
+  activeProfile: SearchProfile | null;
+  scorePreview: CandidateScorePreview | undefined;
+}) {
+  if (!activeProfile || !scorePreview) {
+    return null;
+  }
+
+  const items = getScoreCoverageItems(activeProfile, scorePreview);
+  const knownCount = items.filter((item) => item.status === "known").length;
+  const missingCount = items.filter((item) => item.status === "missing").length;
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 grid max-w-3xl gap-2">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="font-medium text-foreground">Score inputs</span>
+        <span className="text-muted-foreground">
+          {knownCount}/{items.length} known
+        </span>
+        {missingCount > 0 ? (
+          <span className="text-amber-700">{missingCount} need enrichment</span>
+        ) : null}
+      </div>
+      <div className="flex h-1.5 overflow-hidden rounded-full border border-border bg-secondary">
+        {items.map((item) => (
+          <span
+            key={item.category}
+            className={cn(
+              "h-full flex-1",
+              item.status === "known" && "bg-emerald-500",
+              item.status === "missing" && "bg-amber-400",
+              item.status === "unknown" && "bg-slate-300"
+            )}
+            title={item.title}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((item) => (
+          <span
+            key={item.category}
+            title={item.title}
+            className={cn(
+              "inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[11px] font-medium",
+              item.status === "known" &&
+                "border-emerald-200 bg-emerald-50 text-emerald-800",
+              item.status === "missing" &&
+                "border-amber-200 bg-amber-50 text-amber-900",
+              item.status === "unknown" &&
+                "border-border bg-secondary text-muted-foreground"
+            )}
+          >
+            {item.status === "known" ? (
+              <CheckCircle2 aria-hidden="true" className="size-3" />
+            ) : item.status === "missing" ? (
+              <XCircle aria-hidden="true" className="size-3" />
+            ) : (
+              <Circle aria-hidden="true" className="size-3" />
+            )}
+            {item.label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1627,6 +1862,10 @@ export function ListingAlertManager() {
                               </div>
                             </div>
                           </div>
+                          <CandidateScoreCoverage
+                            activeProfile={activeProfile}
+                            scorePreview={scorePreview}
+                          />
                           <div className="mt-3 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
                             <span className="font-medium text-foreground">
                               {listingSourceLabel}
