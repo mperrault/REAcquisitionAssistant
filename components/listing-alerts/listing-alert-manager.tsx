@@ -334,6 +334,36 @@ function formatScoreGapTitle(missingData: string[]) {
     : "No score gaps";
 }
 
+function cleanActionUrl(value: string) {
+  return value
+    .replace(/(?:\]|\|)(?=https?:\/\/).*$/i, "")
+    .replace(/[\]),.;]+$/g, "");
+}
+
+function isLikelyImageActionUrl(value: string) {
+  try {
+    const parsedUrl = new URL(value);
+    return /\.(?:jpe?g|png|webp)$/i.test(parsedUrl.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function extractActionUrls(value: string) {
+  const separatedValue = value
+    .replace(/\](https?:\/\/)/gi, "] $1")
+    .replace(/\|(https?:\/\/)/gi, " $1");
+  const matches = separatedValue.match(/https?:\/\/[^\s<>"')\]|]+/gi) ?? [];
+
+  return Array.from(new Set(matches.map(cleanActionUrl).filter(Boolean)));
+}
+
+function getCandidateOpenUrl(candidate: ListingCandidate) {
+  const urls = extractActionUrls(candidate.listingUrl);
+
+  return urls.find((url) => !isLikelyImageActionUrl(url)) ?? "";
+}
+
 function getMissingPhotoReason(candidate: ListingCandidate) {
   return (
     candidate.warnings.find((warning) =>
@@ -348,7 +378,8 @@ function getMissingPhotoReason(candidate: ListingCandidate) {
 
 function canEnrichCandidate(candidate: ListingCandidate) {
   return Boolean(
-    candidate.listingUrl && (!candidate.primaryPhotoUrl || candidate.askingPrice === null)
+    getCandidateOpenUrl(candidate) &&
+      (!candidate.primaryPhotoUrl || candidate.askingPrice === null)
   );
 }
 
@@ -891,6 +922,7 @@ export function ListingAlertManager() {
   }
 
   async function fetchCandidateEnrichment(candidate: ListingCandidate) {
+    const listingUrl = getCandidateOpenUrl(candidate);
     const response = await fetch("/api/listing-alerts/enrich-listing", {
       method: "POST",
       headers: {
@@ -899,7 +931,7 @@ export function ListingAlertManager() {
       body: JSON.stringify({
         candidate: {
           id: candidate.id,
-          listingUrl: candidate.listingUrl,
+          listingUrl,
           addressLine1: candidate.addressLine1,
           city: candidate.city,
           state: candidate.state,
@@ -1493,6 +1525,7 @@ export function ListingAlertManager() {
                 const isEnrichingCandidate = enrichingCandidateIds.has(
                   candidate.id
                 );
+                const candidateOpenUrl = getCandidateOpenUrl(candidate);
 
                 return (
                   <article key={candidate.id} className="p-4 sm:p-5">
@@ -1644,7 +1677,7 @@ export function ListingAlertManager() {
                       </div>
 
                       <div className="flex min-w-0 flex-wrap items-center gap-2 xl:max-w-64 xl:justify-end">
-                        {candidate.listingUrl ? (
+                        {candidateOpenUrl ? (
                           <Button
                             type="button"
                             variant="outline"
@@ -1652,7 +1685,7 @@ export function ListingAlertManager() {
                             asChild
                           >
                             <a
-                              href={candidate.listingUrl}
+                              href={candidateOpenUrl}
                               target="_blank"
                               rel="noreferrer"
                             >

@@ -39,8 +39,8 @@ export const NO_PROPERTY_PHOTO_IN_HTML_WARNING =
 export const NO_MATCHING_PROPERTY_PHOTO_WARNING =
   "No matching property photo found for this candidate.";
 
-const urlPattern = /https?:\/\/[^\s<>"')]+/gi;
-const htmlUrlPattern = /https?:\/\/[^\s"'<>\\)]+/gi;
+const urlPattern = /https?:\/\/[^\s<>"')\]|]+/gi;
+const htmlUrlPattern = /https?:\/\/[^\s"'<>\\)\]|]+/gi;
 const streetNumberPatternSource = String.raw`\d{1,6}(?:-\d{1,6})?`;
 const streetSuffixPatternSource = String.raw`(?:street|st|road|rd|avenue|ave|lane|ln|drive|dr|court|ct|circle|cir|way|trail|trl|terrace|ter|place|pl|pike|highway|hwy|turnpike|tpke|boulevard|blvd|route|rt)`;
 const addressStartPattern = new RegExp(
@@ -229,7 +229,9 @@ function defaultCreateId() {
 }
 
 function cleanUrl(value: string) {
-  return value.replace(/[\]),.;]+$/g, "");
+  return value
+    .replace(/(?:\]|\|)(?=https?:\/\/).*$/i, "")
+    .replace(/[\]),.;]+$/g, "");
 }
 
 function normalizeUrl(value: string) {
@@ -275,12 +277,28 @@ function isLikelySystemUrl(value: string) {
   );
 }
 
+function isLikelyImageAssetUrl(value: string) {
+  try {
+    const parsedUrl = new URL(value);
+    return /\.(?:jpe?g|png|webp)$/i.test(parsedUrl.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function extractUrls(text: string) {
-  const matches = Array.from(text.matchAll(urlPattern), (match) =>
+  const separatedText = text
+    .replace(/\](https?:\/\/)/gi, "] $1")
+    .replace(/\|(https?:\/\/)/gi, " $1");
+  const matches = Array.from(separatedText.matchAll(urlPattern), (match) =>
     normalizeUrl(match[0])
   );
 
   return Array.from(new Set(matches)).filter((url) => !isLikelySystemUrl(url));
+}
+
+function selectListingUrl(urls: string[]) {
+  return urls.find((url) => !isLikelyImageAssetUrl(url)) ?? "";
 }
 
 function getHtmlAttribute(tag: string, attributeName: string) {
@@ -1358,7 +1376,7 @@ function parseCandidateBlock(
 
   const normalizedSupplementalText = normalizeText(supplementalText);
   const urls = extractUrls(normalizedBlock);
-  const listingUrl = urls[0] ?? "";
+  const listingUrl = selectListingUrl(urls);
   const address = extractAddress(normalizedBlock);
   const normalizedPhotoUrls = Array.from(new Set(photoUrls.filter(Boolean)));
   const askingPrice =

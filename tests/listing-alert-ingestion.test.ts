@@ -535,6 +535,34 @@ listing
     expect(result.candidates[0]?.addressLine1).toBe("47 High St");
     expect(result.candidates[0]?.askingPrice).toBe(315000);
     expect(result.candidates[0]?.primaryPhotoUrl).toBe(realtorHighPhotoUrl);
+    expect(result.candidates[0]?.listingUrl).toBe(sharedTrackingUrl);
+  });
+
+  it("separates Realtor photo URLs from pipe-delimited click URLs", () => {
+    const sharedTrackingUrl =
+      "https://e.e.mail.realtor.com/c2/1946:source:d260818:user:run/f10e982db52b1657c2eeb5a8c7e6210el-m2007430695rd-w640_h480?jwtH=header&jwtP=payload&jwtS=signature";
+    const result = parseListingAlertText(
+      `Price dropped to $250,000: 175 W Stafford Rd
+
+${realtorStaffordPhotoUrl}|${sharedTrackingUrl}
+For sale
+$250,000
+3 bed 3 bath 1,799 sqft
+175 W Stafford Rd
+Stafford, CT 06076
+View listing`,
+      {
+        timestamp,
+        createId: deterministicIds("fact")
+      }
+    );
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.addressLine1).toBe("175 W Stafford Rd");
+    expect(result.candidates[0]?.askingPrice).toBe(250000);
+    expect(result.candidates[0]?.primaryPhotoUrl).toBe(realtorStaffordPhotoUrl);
+    expect(result.candidates[0]?.listingUrl).toBe(sharedTrackingUrl);
+    expect(result.candidates[0]?.listingUrl).not.toContain("rdcpix.com");
   });
 
   it("keeps order fallback when Realtor multi-photo HTML has no address context", () => {
