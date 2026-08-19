@@ -3,13 +3,15 @@
 import Image from "next/image";
 import Link from "next/link";
 import * as React from "react";
-import { Check, Home, Scale } from "lucide-react";
+import { Check, ExternalLink, Home, RotateCcw, Scale } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   createDashboardSummaries,
   getDefaultComparePropertyIds,
+  getProjectedTotalInvestment,
+  getRenovationExpectedCost,
   type DashboardPropertySummary
 } from "@/lib/properties/property-dashboard";
 import {
@@ -30,6 +32,9 @@ import {
 import type { ScoreEvaluationState } from "@/lib/scoring/types";
 import { cn } from "@/lib/utils";
 
+const COMPARE_SELECTION_STORAGE_KEY =
+  "re-acquisition-assistant.compare-selection.v1";
+
 function formatCurrency(value: number | null) {
   if (value === null) {
     return "Price unknown";
@@ -40,6 +45,14 @@ function formatCurrency(value: number | null) {
     currency: "USD",
     maximumFractionDigits: 0
   }).format(value);
+}
+
+function formatNumber(value: number | null) {
+  return value === null ? "-" : value.toLocaleString();
+}
+
+function formatText(value: string) {
+  return value.trim() || "-";
 }
 
 function formatAddress(property: PropertyRecord) {
@@ -83,6 +96,30 @@ function getScoreVariant(summary: DashboardPropertySummary) {
   }
 
   return summary.latestEvaluation ? ("warning" as const) : ("outline" as const);
+}
+
+function loadCompareSelection(storage: Storage, validIds: Set<string>) {
+  const rawValue = storage.getItem(COMPARE_SELECTION_STORAGE_KEY);
+
+  if (!rawValue) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((value): value is string => typeof value === "string")
+      .filter((value, index, values) => values.indexOf(value) === index)
+      .filter((value) => validIds.has(value))
+      .slice(0, 4);
+  } catch {
+    return [];
+  }
 }
 
 export function CompareManager() {
@@ -134,9 +171,30 @@ export function CompareManager() {
       return;
     }
 
-    setSelectedIds(getDefaultComparePropertyIds(summaries, 4));
+    const validIds = new Set(summaries.map((summary) => summary.property.id));
+    const storedSelection = loadCompareSelection(window.localStorage, validIds);
+    setSelectedIds(
+      storedSelection.length >= 2
+        ? storedSelection
+        : getDefaultComparePropertyIds(summaries, 4)
+    );
     setHasInitializedSelection(true);
   }, [hasInitializedSelection, summaries]);
+
+  React.useEffect(() => {
+    if (!hasInitializedSelection) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      COMPARE_SELECTION_STORAGE_KEY,
+      JSON.stringify(selectedIds)
+    );
+  }, [hasInitializedSelection, selectedIds]);
+
+  function resetSelection() {
+    setSelectedIds(getDefaultComparePropertyIds(summaries, 4));
+  }
 
   function toggleSelection(propertyId: string) {
     setSelectedIds((current) => {
@@ -167,12 +225,18 @@ export function CompareManager() {
             status.
           </p>
         </div>
-        <Button asChild variant="outline">
-          <Link href="/properties">
-            <Home aria-hidden="true" />
-            Properties
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={resetSelection}>
+            <RotateCcw aria-hidden="true" />
+            Reset Selection
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/properties">
+              <Home aria-hidden="true" />
+              Properties
+            </Link>
+          </Button>
+        </div>
       </header>
 
       <section className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
@@ -309,6 +373,27 @@ function ComparisonTable({
               </td>
             ))}
           </ComparisonRow>
+          <ComparisonRow label="Estimated Purchase">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {formatCurrency(summary.property.estimatedPurchasePrice)}
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Renovation Estimate">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {formatCurrency(getRenovationExpectedCost(summary.property))}
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Total Investment">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top font-medium">
+                {formatCurrency(getProjectedTotalInvestment(summary.property))}
+              </td>
+            ))}
+          </ComparisonRow>
           <ComparisonRow label="Beds / Baths">
             {selectedSummaries.map((summary) => (
               <td key={summary.property.id} className="p-3 align-top">
@@ -320,7 +405,7 @@ function ComparisonTable({
           <ComparisonRow label="Sqft">
             {selectedSummaries.map((summary) => (
               <td key={summary.property.id} className="p-3 align-top">
-                {summary.property.livingSqft?.toLocaleString() ?? "-"}
+                {formatNumber(summary.property.livingSqft)}
               </td>
             ))}
           </ComparisonRow>
@@ -331,15 +416,95 @@ function ComparisonTable({
               </td>
             ))}
           </ComparisonRow>
+          <ComparisonRow label="Year Built">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {summary.property.yearBuilt ?? "-"}
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Taxes">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {formatCurrency(summary.property.annualPropertyTax)}
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Style">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {formatText(summary.property.houseStyle)}
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Systems">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                <ComparisonList
+                  items={[
+                    `Heat: ${formatText(summary.property.heatingType)}`,
+                    `Water: ${formatText(summary.property.waterSource)}`,
+                    `Sewer: ${formatText(summary.property.sewerType)}`,
+                    `Garage: ${
+                      summary.property.garageSpaces === null
+                        ? "-"
+                        : summary.property.garageSpaces
+                    }`
+                  ]}
+                />
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Category Scores">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {summary.latestEvaluation ? (
+                  <ComparisonList
+                    items={Object.entries(summary.latestEvaluation.categoryScores)
+                      .filter(([, points]) => points !== 0)
+                      .map(([category, points]) => `${category}: ${points}`)}
+                  />
+                ) : (
+                  "None"
+                )}
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Hard Rejects">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {summary.latestEvaluation?.hardRejectReasons.length ? (
+                  <ComparisonList
+                    items={summary.latestEvaluation.hardRejectReasons.map(
+                      (item) => `${item.label}: ${item.detail}`
+                    )}
+                  />
+                ) : (
+                  "None"
+                )}
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Penalties">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {summary.latestEvaluation?.penalties.length ? (
+                  <ComparisonList
+                    items={summary.latestEvaluation.penalties
+                      .slice(0, 5)
+                      .map((item) => `${item.label}: ${item.detail}`)}
+                  />
+                ) : (
+                  "None"
+                )}
+              </td>
+            ))}
+          </ComparisonRow>
           <ComparisonRow label="Score Gaps">
             {selectedSummaries.map((summary) => (
               <td key={summary.property.id} className="p-3 align-top">
                 {summary.latestEvaluation?.missingData.length ? (
-                  <ul className="grid gap-1 text-xs text-muted-foreground">
-                    {summary.latestEvaluation.missingData.map((item) => (
-                      <li key={item}>{item}</li>
-                    ))}
-                  </ul>
+                  <ComparisonList items={summary.latestEvaluation.missingData} />
                 ) : (
                   "None"
                 )}
@@ -350,15 +515,11 @@ function ComparisonTable({
             {selectedSummaries.map((summary) => (
               <td key={summary.property.id} className="p-3 align-top">
                 {summary.latestEvaluation?.positiveFactors.length ? (
-                  <ul className="grid gap-1 text-xs text-muted-foreground">
-                    {summary.latestEvaluation.positiveFactors
-                      .slice(0, 4)
-                      .map((item) => (
-                        <li key={`${item.ruleKey}-${item.detail}`}>
-                          {item.label}: {item.detail}
-                        </li>
-                      ))}
-                  </ul>
+                  <ComparisonList
+                    items={summary.latestEvaluation.positiveFactors
+                      .slice(0, 5)
+                      .map((item) => `${item.label}: ${item.detail}`)}
+                  />
                 ) : (
                   "None"
                 )}
@@ -406,7 +567,27 @@ function PropertyColumnHeader({
         </div>
       ) : null}
       <div className="line-clamp-2 font-semibold">{formatAddress(property)}</div>
+      <Button asChild variant="outline" size="sm">
+        <Link href={`/properties?propertyId=${encodeURIComponent(property.id)}`}>
+          <ExternalLink aria-hidden="true" />
+          Open
+        </Link>
+      </Button>
     </div>
+  );
+}
+
+function ComparisonList({ items }: { items: string[] }) {
+  if (items.length === 0) {
+    return "None";
+  }
+
+  return (
+    <ul className="grid gap-1 text-xs text-muted-foreground">
+      {items.map((item) => (
+        <li key={item}>{item}</li>
+      ))}
+    </ul>
   );
 }
 

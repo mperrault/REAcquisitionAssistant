@@ -8,9 +8,11 @@ import {
   BarChart3,
   Clock3,
   Eye,
+  ExternalLink,
   Home,
   ListChecks,
-  Star
+  Star,
+  XCircle
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +25,9 @@ import {
 } from "@/lib/properties/property-dashboard";
 import {
   createEmptyPropertyState,
-  loadPropertyState
+  loadPropertyState,
+  savePropertyState,
+  upsertProperty
 } from "@/lib/properties/property-persistence";
 import {
   lifecycleStatusOptions,
@@ -138,6 +142,19 @@ export function DashboardManager() {
     [summaries]
   );
 
+  function updateLifecycleStatus(
+    property: PropertyRecord,
+    lifecycleStatus: LifecycleStatus
+  ) {
+    const nextState = upsertProperty(propertyState, {
+      ...property,
+      lifecycleStatus
+    });
+    const persisted = savePropertyState(window.localStorage, nextState);
+
+    setPropertyState(persisted);
+  }
+
   return (
     <div className="mx-auto grid max-w-screen-2xl gap-6 px-4 py-6 sm:px-6 lg:px-8">
       <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -185,24 +202,32 @@ export function DashboardManager() {
           icon={Star}
           items={sections.topCandidates}
           emptyText="No scored candidates yet."
+          viewAllHref="/properties?scoreFilter=scored&sort=score_desc"
+          onLifecycleChange={updateLifecycleStatus}
         />
         <DashboardSection
           title="Recent Properties"
           icon={Clock3}
           items={sections.recentProperties}
           emptyText="No properties saved yet."
+          viewAllHref="/properties?sort=updated_desc"
+          onLifecycleChange={updateLifecycleStatus}
         />
         <DashboardSection
           title="Watch List"
           icon={Eye}
           items={sections.watchList}
           emptyText="No watch-list properties yet."
+          viewAllHref="/properties?status=watch_list"
+          onLifecycleChange={updateLifecycleStatus}
         />
         <DashboardSection
           title="Worth Visiting"
           icon={ListChecks}
           items={sections.worthVisiting}
           emptyText="No properties marked worth visiting yet."
+          viewAllHref="/properties?status=worth_visiting"
+          onLifecycleChange={updateLifecycleStatus}
         />
         <DashboardSection
           title="Rejected By Profile"
@@ -210,6 +235,8 @@ export function DashboardManager() {
           items={sections.rejectedByProfile}
           emptyText="No profile hard rejects yet."
           className="xl:col-span-2"
+          viewAllHref="/properties?scoreFilter=hard_rejected"
+          onLifecycleChange={updateLifecycleStatus}
         />
       </section>
     </div>
@@ -232,13 +259,20 @@ function DashboardSection({
   icon: Icon,
   items,
   emptyText,
-  className
+  className,
+  viewAllHref,
+  onLifecycleChange
 }: {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
   items: DashboardPropertySummary[];
   emptyText: string;
   className?: string;
+  viewAllHref: string;
+  onLifecycleChange: (
+    property: PropertyRecord,
+    lifecycleStatus: LifecycleStatus
+  ) => void;
 }) {
   return (
     <div className={className}>
@@ -246,6 +280,9 @@ function DashboardSection({
         <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
         <h2 className="text-base font-semibold">{title}</h2>
         <Badge variant="outline">{items.length}</Badge>
+        <Button asChild variant="ghost" size="sm" className="ml-auto">
+          <Link href={viewAllHref}>View All</Link>
+        </Button>
       </div>
       <div className="overflow-hidden rounded-md border border-border bg-card">
         {items.length === 0 ? (
@@ -253,7 +290,11 @@ function DashboardSection({
         ) : (
           <div className="divide-y divide-border">
             {items.map((item) => (
-              <PropertyRow key={item.property.id} item={item} />
+              <PropertyRow
+                key={item.property.id}
+                item={item}
+                onLifecycleChange={onLifecycleChange}
+              />
             ))}
           </div>
         )}
@@ -262,7 +303,16 @@ function DashboardSection({
   );
 }
 
-function PropertyRow({ item }: { item: DashboardPropertySummary }) {
+function PropertyRow({
+  item,
+  onLifecycleChange
+}: {
+  item: DashboardPropertySummary;
+  onLifecycleChange: (
+    property: PropertyRecord,
+    lifecycleStatus: LifecycleStatus
+  ) => void;
+}) {
   const { property } = item;
 
   return (
@@ -312,6 +362,44 @@ function PropertyRow({ item }: { item: DashboardPropertySummary }) {
               {item.scoreGapCount === 1 ? "score gap" : "score gaps"}
             </Badge>
           ) : null}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href={`/properties?propertyId=${encodeURIComponent(property.id)}`}>
+              <ExternalLink aria-hidden="true" />
+              Open
+            </Link>
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onLifecycleChange(property, "watch_list")}
+            disabled={property.lifecycleStatus === "watch_list"}
+          >
+            <Eye aria-hidden="true" />
+            Watch
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onLifecycleChange(property, "worth_visiting")}
+            disabled={property.lifecycleStatus === "worth_visiting"}
+          >
+            <ListChecks aria-hidden="true" />
+            Visit
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onLifecycleChange(property, "rejected")}
+            disabled={property.lifecycleStatus === "rejected"}
+          >
+            <XCircle aria-hidden="true" />
+            Reject
+          </Button>
         </div>
       </div>
     </div>

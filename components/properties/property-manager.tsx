@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import * as React from "react";
 import {
   BadgeDollarSign,
@@ -225,6 +226,33 @@ function formatScoreSummaryTitle(evaluation: ScoreEvaluation) {
   return parts.join(" · ");
 }
 
+function isTabId(value: string | null): value is TabId {
+  return Boolean(value && tabs.some((tab) => tab.id === value));
+}
+
+function isLifecycleFilter(value: string | null): value is LifecycleStatus | "all" {
+  return (
+    value === "all" ||
+    Boolean(
+      value &&
+        lifecycleStatusOptions.some((option) => option.value === value)
+    )
+  );
+}
+
+function isScoreFilter(value: string | null): value is PropertyScoreFilter {
+  return Boolean(
+    value &&
+      propertyScoreFilterOptions.some((option) => option.value === value)
+  );
+}
+
+function isSortMode(value: string | null): value is PropertySortMode {
+  return Boolean(
+    value && propertySortOptions.some((option) => option.value === value)
+  );
+}
+
 function getLifecycleLabel(status: LifecycleStatus) {
   return (
     lifecycleStatusOptions.find((option) => option.value === status)?.label ??
@@ -240,6 +268,7 @@ function getListingLabel(status: ListingStatus) {
 }
 
 export function PropertyManager() {
+  const searchParams = useSearchParams();
   const [propertyState, setPropertyState] = React.useState<PropertyState>(() =>
     createEmptyPropertyState()
   );
@@ -269,15 +298,41 @@ export function PropertyManager() {
     const result = loadPropertyState(window.localStorage);
     const profileResult = loadProfileState(window.localStorage);
     const scoreResult = loadScoreState(window.localStorage);
+    const requestedPropertyId = searchParams.get("propertyId");
+    const requestedTab = searchParams.get("tab");
+    const requestedStatus = searchParams.get("status");
+    const requestedScoreFilter = searchParams.get("scoreFilter");
+    const requestedSort = searchParams.get("sort");
     setPropertyState(result.state);
     setProfileState(profileResult.state);
     setScoreState(scoreResult.state);
     setLoadSource(result.source);
 
-    const firstProperty = result.state.properties[0] ?? null;
-    setSelectedPropertyId(firstProperty?.id ?? null);
-    setDraft(firstProperty ? cloneProperty(firstProperty) : null);
-  }, []);
+    const selectedProperty =
+      result.state.properties.find(
+        (property) => property.id === requestedPropertyId
+      ) ??
+      result.state.properties[0] ??
+      null;
+    setSelectedPropertyId(selectedProperty?.id ?? null);
+    setDraft(selectedProperty ? cloneProperty(selectedProperty) : null);
+
+    if (isTabId(requestedTab)) {
+      setActiveTab(requestedTab);
+    }
+
+    if (isLifecycleFilter(requestedStatus)) {
+      setStatusFilter(requestedStatus);
+    }
+
+    if (isScoreFilter(requestedScoreFilter)) {
+      setScoreFilter(requestedScoreFilter);
+    }
+
+    if (isSortMode(requestedSort)) {
+      setSortMode(requestedSort);
+    }
+  }, [searchParams]);
 
   const selectedProperty = React.useMemo(
     () =>

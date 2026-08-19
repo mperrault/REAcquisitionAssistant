@@ -58,6 +58,40 @@ function compareByScoreDesc(
   );
 }
 
+export function getPropertyNumericFact(
+  property: PropertyRecord,
+  factKey: string
+) {
+  const fact = property.facts.find((item) => item.factKey === factKey);
+
+  return typeof fact?.value === "number" && Number.isFinite(fact.value)
+    ? fact.value
+    : null;
+}
+
+export function getRenovationExpectedCost(property: PropertyRecord) {
+  return getPropertyNumericFact(property, "renovation.expected_cost");
+}
+
+export function getProjectedTotalInvestment(property: PropertyRecord) {
+  const storedTotal = getPropertyNumericFact(
+    property,
+    "finance.projected_total_investment"
+  );
+
+  if (storedTotal !== null) {
+    return storedTotal;
+  }
+
+  const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+
+  if (basePrice === null) {
+    return null;
+  }
+
+  return basePrice + (getRenovationExpectedCost(property) ?? 0);
+}
+
 export function createDashboardPropertySummary(
   property: PropertyRecord,
   scoreState: ScoreEvaluationState,

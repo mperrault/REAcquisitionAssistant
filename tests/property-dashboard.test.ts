@@ -4,9 +4,14 @@ import {
   getDashboardCounts,
   getDashboardSections,
   getDefaultComparePropertyIds,
+  getProjectedTotalInvestment,
+  getRenovationExpectedCost,
   createDashboardSummaries
 } from "@/lib/properties/property-dashboard";
-import { createPropertyRecord } from "@/lib/properties/property-persistence";
+import {
+  createPropertyFact,
+  createPropertyRecord
+} from "@/lib/properties/property-persistence";
 import { quietCornerSeedProfile } from "@/lib/profiles/quiet-corner-seed";
 import { evaluateProperty } from "@/lib/scoring/evaluate-property";
 import {
@@ -162,5 +167,38 @@ describe("property dashboard summaries", () => {
       "first",
       "unscored"
     ]);
+  });
+
+  it("calculates renovation and projected total investment from property facts", () => {
+    const calculated = createPropertyRecord({
+      askingPrice: 250000,
+      estimatedPurchasePrice: 240000,
+      facts: [
+        createPropertyFact({
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 60000
+        })
+      ]
+    });
+    const stored = createPropertyRecord({
+      askingPrice: 250000,
+      facts: [
+        createPropertyFact({
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 60000
+        }),
+        createPropertyFact({
+          factKey: "finance.projected_total_investment",
+          label: "Projected total investment",
+          value: 325000
+        })
+      ]
+    });
+
+    expect(getRenovationExpectedCost(calculated)).toBe(60000);
+    expect(getProjectedTotalInvestment(calculated)).toBe(300000);
+    expect(getProjectedTotalInvestment(stored)).toBe(325000);
   });
 });
