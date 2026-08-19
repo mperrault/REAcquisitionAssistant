@@ -196,9 +196,31 @@ describe("property dashboard summaries", () => {
         })
       ]
     });
+    const lineItemBased = createPropertyRecord({
+      estimatedPurchasePrice: 200000,
+      facts: [
+        createPropertyFact({
+          factKey: "renovation.line_item.roof",
+          label: "Roof",
+          value: 25000
+        }),
+        createPropertyFact({
+          factKey: "renovation.line_item.kitchen",
+          label: "Kitchen",
+          value: 35000
+        }),
+        createPropertyFact({
+          factKey: "finance.closing_costs",
+          label: "Closing and acquisition costs",
+          value: 8000
+        })
+      ]
+    });
 
     expect(getRenovationExpectedCost(calculated)).toBe(60000);
     expect(getProjectedTotalInvestment(calculated)).toBe(300000);
     expect(getProjectedTotalInvestment(stored)).toBe(325000);
+    expect(getRenovationExpectedCost(lineItemBased)).toBe(60000);
+    expect(getProjectedTotalInvestment(lineItemBased)).toBe(268000);
   });
 });

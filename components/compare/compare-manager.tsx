@@ -10,8 +10,7 @@ import { Button } from "@/components/ui/button";
 import {
   createDashboardSummaries,
   getDefaultComparePropertyIds,
-  getProjectedTotalInvestment,
-  getRenovationExpectedCost,
+  getPropertyNumericFact,
   type DashboardPropertySummary
 } from "@/lib/properties/property-dashboard";
 import {
@@ -383,14 +382,23 @@ function ComparisonTable({
           <ComparisonRow label="Renovation Estimate">
             {selectedSummaries.map((summary) => (
               <td key={summary.property.id} className="p-3 align-top">
-                {formatCurrency(getRenovationExpectedCost(summary.property))}
+                {formatCurrency(summary.renovationExpectedCost)}
+              </td>
+            ))}
+          </ComparisonRow>
+          <ComparisonRow label="Closing Costs">
+            {selectedSummaries.map((summary) => (
+              <td key={summary.property.id} className="p-3 align-top">
+                {formatCurrency(
+                  getPropertyNumericFact(summary.property, "finance.closing_costs")
+                )}
               </td>
             ))}
           </ComparisonRow>
           <ComparisonRow label="Total Investment">
             {selectedSummaries.map((summary) => (
               <td key={summary.property.id} className="p-3 align-top font-medium">
-                {formatCurrency(getProjectedTotalInvestment(summary.property))}
+                {formatCurrency(summary.projectedTotalInvestment)}
               </td>
             ))}
           </ComparisonRow>

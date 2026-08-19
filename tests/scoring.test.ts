@@ -172,6 +172,60 @@ describe("property scoring", () => {
     );
   });
 
+  it("uses renovation line items, contingency, and closing costs for financial fit", () => {
+    const property = createPropertyRecord({
+      id: "property-budget",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 300000,
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-roof",
+          factKey: "renovation.line_item.roof",
+          label: "Roof",
+          value: 50000
+        }),
+        createPropertyFact({
+          id: "fact-contingency",
+          factKey: "renovation.contingency_amount",
+          label: "Renovation contingency amount",
+          value: 15000
+        }),
+        createPropertyFact({
+          id: "fact-closing",
+          factKey: "finance.closing_costs",
+          label: "Closing and acquisition costs",
+          value: 10000
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-08-10T22:12:00.000Z",
+      () => "score-budget"
+    );
+
+    expect(evaluation.positiveFactors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "finance.projected_total_investment",
+          result: "bonus"
+        })
+      ])
+    );
+    expect(evaluation.missingData).not.toContain(
+      "Expected renovation cost is missing for total investment scoring."
+    );
+  });
+
   it("records missing data warnings for incomplete records", () => {
     const property = createPropertyRecord({
       id: "property-4"

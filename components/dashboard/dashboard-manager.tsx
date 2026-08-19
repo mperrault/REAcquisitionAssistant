@@ -341,6 +341,7 @@ function PropertyRow({
         </div>
         <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <span>{formatCurrency(property.askingPrice)}</span>
+          <span>Total {formatCurrency(item.projectedTotalInvestment)}</span>
           <span>{property.bedrooms ?? "-"} bd</span>
           <span>{property.bathrooms ?? "-"} ba</span>
           <span>{property.livingSqft?.toLocaleString() ?? "-"} sqft</span>

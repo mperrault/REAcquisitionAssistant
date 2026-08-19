@@ -9,6 +9,8 @@ export type DashboardPropertySummary = {
   scoreLabel: string;
   scoreGapCount: number;
   hardRejected: boolean;
+  renovationExpectedCost: number | null;
+  projectedTotalInvestment: number | null;
 };
 
 export type DashboardSections = {
@@ -69,8 +71,27 @@ export function getPropertyNumericFact(
     : null;
 }
 
+export function getRenovationLineItemTotal(property: PropertyRecord) {
+  return property.facts
+    .filter((fact) => fact.factKey.startsWith("renovation.line_item."))
+    .reduce(
+      (total, fact) =>
+        total +
+        (typeof fact.value === "number" && Number.isFinite(fact.value)
+          ? fact.value
+          : 0),
+      0
+    );
+}
+
 export function getRenovationExpectedCost(property: PropertyRecord) {
-  return getPropertyNumericFact(property, "renovation.expected_cost");
+  const explicitEstimate = getPropertyNumericFact(
+    property,
+    "renovation.expected_cost"
+  );
+  const lineItemTotal = getRenovationLineItemTotal(property);
+
+  return explicitEstimate ?? (lineItemTotal > 0 ? lineItemTotal : null);
 }
 
 export function getProjectedTotalInvestment(property: PropertyRecord) {
@@ -84,12 +105,28 @@ export function getProjectedTotalInvestment(property: PropertyRecord) {
   }
 
   const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+  const closingCosts = getPropertyNumericFact(property, "finance.closing_costs");
+  const contingencyAmount = getPropertyNumericFact(
+    property,
+    "renovation.contingency_amount"
+  );
 
   if (basePrice === null) {
     return null;
   }
 
-  return basePrice + (getRenovationExpectedCost(property) ?? 0);
+  const renovationExpectedCost = getRenovationExpectedCost(property);
+
+  if (renovationExpectedCost === null) {
+    return null;
+  }
+
+  return (
+    basePrice +
+    renovationExpectedCost +
+    (contingencyAmount ?? 0) +
+    (closingCosts ?? 0)
+  );
 }
 
 export function createDashboardPropertySummary(
@@ -109,7 +146,9 @@ export function createDashboardPropertySummary(
     score: latestEvaluation?.normalizedScore ?? null,
     scoreLabel: latestEvaluation?.scoreLabel ?? "Not scored",
     scoreGapCount: latestEvaluation?.missingData.length ?? 0,
-    hardRejected: latestEvaluation?.hardRejected ?? false
+    hardRejected: latestEvaluation?.hardRejected ?? false,
+    renovationExpectedCost: getRenovationExpectedCost(property),
+    projectedTotalInvestment: getProjectedTotalInvestment(property)
   };
 }
 

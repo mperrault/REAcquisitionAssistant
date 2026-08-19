@@ -42,6 +42,10 @@ import {
   type PropertySortMode
 } from "@/lib/properties/property-list-filters";
 import {
+  getProjectedTotalInvestment,
+  getRenovationExpectedCost
+} from "@/lib/properties/property-dashboard";
+import {
   type LifecycleStatus,
   type ListingStatus,
   type PropertyFact,
@@ -658,6 +662,9 @@ export function PropertyManager() {
                         {property.city || "Town unknown"} ·{" "}
                         {formatCurrency(property.askingPrice)}
                       </div>
+                      <div className="mt-1 truncate text-xs text-muted-foreground">
+                        Total {formatCurrency(getProjectedTotalInvestment(property))}
+                      </div>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
                       <Badge variant="outline">
@@ -693,6 +700,9 @@ export function PropertyManager() {
                       </Badge>
                       <Badge variant="outline">
                         Listing: {getListingLabel(draft.listingStatus)}
+                      </Badge>
+                      <Badge variant="outline">
+                        Total {formatCurrency(getProjectedTotalInvestment(draft))}
                       </Badge>
                       <Badge variant="outline">{draft.facts.length} facts</Badge>
                       {latestEvaluation ? (
@@ -1246,6 +1256,122 @@ function FactsTab({
   );
 }
 
+const renovationFactLabels = {
+  low: "Low renovation estimate",
+  expected: "Expected renovation cost",
+  high: "High renovation estimate",
+  contingencyPercent: "Renovation contingency percent",
+  contingencyAmount: "Renovation contingency amount",
+  closingCosts: "Closing and acquisition costs",
+  projectedTotal: "Projected total investment"
+};
+
+type RenovationLineItem = {
+  fact: PropertyFact;
+  amount: number | null;
+};
+
+function getNumericFactValue(property: PropertyRecord, factKey: string) {
+  const fact = property.facts.find((item) => item.factKey === factKey);
+
+  return typeof fact?.value === "number" && Number.isFinite(fact.value)
+    ? fact.value
+    : null;
+}
+
+function upsertNumberFact(
+  facts: PropertyFact[],
+  factKey: string,
+  label: string,
+  value: number | null
+) {
+  if (value === null) {
+    return facts.filter((fact) => fact.factKey !== factKey);
+  }
+
+  const existingFact = facts.find((fact) => fact.factKey === factKey);
+
+  if (existingFact) {
+    return facts.map((fact) =>
+      fact.id === existingFact.id ? { ...fact, label, value } : fact
+    );
+  }
+
+  return [
+    ...facts,
+    createPropertyFact({
+      factKey,
+      label,
+      value,
+      sourceType: "user_entered",
+      sourceReference: "Financials"
+    })
+  ];
+}
+
+function getRenovationLineItems(property: PropertyRecord): RenovationLineItem[] {
+  return property.facts
+    .filter((fact) => fact.factKey.startsWith("renovation.line_item."))
+    .map((fact) => ({
+      fact,
+      amount:
+        typeof fact.value === "number" && Number.isFinite(fact.value)
+          ? fact.value
+          : null
+    }));
+}
+
+function getRenovationLineItemTotal(property: PropertyRecord) {
+  return getRenovationLineItems(property).reduce(
+    (total, item) => total + (item.amount ?? 0),
+    0
+  );
+}
+
+function getCalculatedContingencyAmount(property: PropertyRecord) {
+  const expected = getRenovationExpectedCost(property);
+  const contingencyPercent = getNumericFactValue(
+    property,
+    "renovation.contingency_percent"
+  );
+
+  if (expected === null || contingencyPercent === null) {
+    return null;
+  }
+
+  return Math.round(expected * (contingencyPercent / 100));
+}
+
+function refreshInvestmentFacts(property: PropertyRecord): PropertyRecord {
+  const contingencyAmount = getCalculatedContingencyAmount(property);
+  const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+  const expected = getRenovationExpectedCost(property);
+  const projectedTotal =
+    basePrice !== null && expected !== null
+      ? basePrice +
+        expected +
+        (contingencyAmount ?? 0) +
+        (getNumericFactValue(property, "finance.closing_costs") ?? 0)
+      : null;
+  let facts = upsertNumberFact(
+    property.facts,
+    "renovation.contingency_amount",
+    renovationFactLabels.contingencyAmount,
+    contingencyAmount
+  );
+  facts = upsertNumberFact(
+    facts,
+    "finance.projected_total_investment",
+    renovationFactLabels.projectedTotal,
+    projectedTotal
+  );
+
+  return {
+    ...property,
+    facts
+  };
+}
+
 function FinancialsTab({
   draft,
   updateDraft
@@ -1253,52 +1379,309 @@ function FinancialsTab({
   draft: PropertyRecord;
   updateDraft: (patch: Partial<PropertyRecord>) => void;
 }) {
+  const lowEstimate = getNumericFactValue(draft, "renovation.estimate_low");
+  const expectedEstimate = getRenovationExpectedCost(draft);
+  const highEstimate = getNumericFactValue(draft, "renovation.estimate_high");
+  const contingencyPercent = getNumericFactValue(
+    draft,
+    "renovation.contingency_percent"
+  );
+  const contingencyAmount = getCalculatedContingencyAmount(draft);
+  const closingCosts = getNumericFactValue(draft, "finance.closing_costs");
+  const projectedTotal = getProjectedTotalInvestment(draft);
+  const lineItems = getRenovationLineItems(draft);
+  const lineItemTotal = getRenovationLineItemTotal(draft);
+
+  function applyFinancialPatch(patch: Partial<PropertyRecord>) {
+    const nextDraft = refreshInvestmentFacts({
+      ...draft,
+      ...patch
+    });
+
+    updateDraft(nextDraft);
+  }
+
+  function updateRenovationFact(
+    factKey: string,
+    label: string,
+    value: number | null
+  ) {
+    const facts = upsertNumberFact(draft.facts, factKey, label, value);
+    updateDraft(refreshInvestmentFacts({ ...draft, facts }));
+  }
+
+  function addLineItem() {
+    const fact = createPropertyFact({
+      factKey: `renovation.line_item.${Date.now()}`,
+      label: "Renovation line item",
+      value: 0,
+      sourceType: "user_entered",
+      sourceReference: "Renovation estimate"
+    });
+
+    updateDraft(refreshInvestmentFacts({ ...draft, facts: [...draft.facts, fact] }));
+  }
+
+  function updateLineItem(
+    factId: string,
+    patch: Partial<Pick<PropertyFact, "label" | "value">>
+  ) {
+    updateDraft(
+      refreshInvestmentFacts({
+        ...draft,
+        facts: draft.facts.map((fact) =>
+          fact.id === factId ? { ...fact, ...patch } : fact
+        )
+      })
+    );
+  }
+
+  function removeLineItem(factId: string) {
+    updateDraft(
+      refreshInvestmentFacts({
+        ...draft,
+        facts: draft.facts.filter((fact) => fact.id !== factId)
+      })
+    );
+  }
+
+  function useLineItemTotal() {
+    updateRenovationFact(
+      "renovation.expected_cost",
+      renovationFactLabels.expected,
+      lineItemTotal
+    );
+  }
+
   return (
-    <Section title="Financials">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <NumberField
-          label="Asking Price"
-          value={draft.askingPrice}
-          onChange={(askingPrice) => updateDraft({ askingPrice })}
-        />
-        <NumberField
-          label="Estimated Purchase"
-          value={draft.estimatedPurchasePrice}
-          onChange={(estimatedPurchasePrice) =>
-            updateDraft({ estimatedPurchasePrice })
-          }
-        />
-        <NumberField
-          label="Annual Property Tax"
-          value={draft.annualPropertyTax}
-          onChange={(annualPropertyTax) => updateDraft({ annualPropertyTax })}
-        />
-        <NumberField
-          label="HOA Fee"
-          value={draft.hoaFee}
-          onChange={(hoaFee) => updateDraft({ hoaFee })}
-        />
-        <Field label="HOA Present">
-          <Select
-            value={
-              draft.hoaPresent === null ? "unknown" : draft.hoaPresent ? "yes" : "no"
+    <div className="grid gap-5">
+      <Section title="Purchase And Carrying Costs">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <NumberField
+            label="Asking Price"
+            value={draft.askingPrice}
+            onChange={(askingPrice) => applyFinancialPatch({ askingPrice })}
+          />
+          <NumberField
+            label="Estimated Purchase"
+            value={draft.estimatedPurchasePrice}
+            onChange={(estimatedPurchasePrice) =>
+              applyFinancialPatch({ estimatedPurchasePrice })
             }
-            onChange={(event) =>
-              updateDraft({
-                hoaPresent:
-                  event.target.value === "unknown"
-                    ? null
-                    : event.target.value === "yes"
-              })
+          />
+          <NumberField
+            label="Annual Property Tax"
+            value={draft.annualPropertyTax}
+            onChange={(annualPropertyTax) =>
+              applyFinancialPatch({ annualPropertyTax })
             }
-          >
-            <option value="unknown">Unknown</option>
-            <option value="yes">Yes</option>
-            <option value="no">No</option>
-          </Select>
-        </Field>
+          />
+          <NumberField
+            label="HOA Fee"
+            value={draft.hoaFee}
+            onChange={(hoaFee) => applyFinancialPatch({ hoaFee })}
+          />
+          <NumberField
+            label="Closing Costs"
+            value={closingCosts}
+            onChange={(value) =>
+              updateRenovationFact(
+                "finance.closing_costs",
+                renovationFactLabels.closingCosts,
+                value
+              )
+            }
+          />
+          <Field label="HOA Present">
+            <Select
+              value={
+                draft.hoaPresent === null
+                  ? "unknown"
+                  : draft.hoaPresent
+                    ? "yes"
+                    : "no"
+              }
+              onChange={(event) =>
+                applyFinancialPatch({
+                  hoaPresent:
+                    event.target.value === "unknown"
+                      ? null
+                      : event.target.value === "yes"
+                })
+              }
+            >
+              <option value="unknown">Unknown</option>
+              <option value="yes">Yes</option>
+              <option value="no">No</option>
+            </Select>
+          </Field>
+        </div>
+      </Section>
+
+      <Section title="Renovation Estimate">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <NumberField
+            label="Low"
+            value={lowEstimate}
+            onChange={(value) =>
+              updateRenovationFact(
+                "renovation.estimate_low",
+                renovationFactLabels.low,
+                value
+              )
+            }
+          />
+          <NumberField
+            label="Expected"
+            value={expectedEstimate}
+            onChange={(value) =>
+              updateRenovationFact(
+                "renovation.expected_cost",
+                renovationFactLabels.expected,
+                value
+              )
+            }
+          />
+          <NumberField
+            label="High"
+            value={highEstimate}
+            onChange={(value) =>
+              updateRenovationFact(
+                "renovation.estimate_high",
+                renovationFactLabels.high,
+                value
+              )
+            }
+          />
+          <NumberField
+            label="Contingency %"
+            value={contingencyPercent}
+            step="0.5"
+            onChange={(value) =>
+              updateRenovationFact(
+                "renovation.contingency_percent",
+                renovationFactLabels.contingencyPercent,
+                value
+              )
+            }
+          />
+          <div className="rounded-md border border-border bg-card px-3 py-2">
+            <div className="text-xs font-medium uppercase text-muted-foreground">
+              Contingency
+            </div>
+            <div className="mt-1 text-lg font-semibold">
+              {formatCurrency(contingencyAmount)}
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="Renovation Line Items"
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={useLineItemTotal}
+              disabled={lineItems.length === 0}
+            >
+              <BadgeDollarSign aria-hidden="true" />
+              Use Total
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={addLineItem}>
+              <Plus aria-hidden="true" />
+              Add Item
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-3">
+          <div className="rounded-md border border-border bg-card px-3 py-2">
+            <div className="text-xs font-medium uppercase text-muted-foreground">
+              Line Item Total
+            </div>
+            <div className="mt-1 text-lg font-semibold">
+              {formatCurrency(lineItemTotal)}
+            </div>
+          </div>
+          {lineItems.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+              No renovation line items recorded.
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {lineItems.map((item) => (
+                <div
+                  key={item.fact.id}
+                  className="grid gap-3 rounded-md border border-border bg-card p-3 md:grid-cols-[minmax(0,1fr)_160px_44px]"
+                >
+                  <Field label="Item">
+                    <Input
+                      value={item.fact.label}
+                      onChange={(event) =>
+                        updateLineItem(item.fact.id, {
+                          label: event.target.value
+                        })
+                      }
+                    />
+                  </Field>
+                  <NumberField
+                    label="Amount"
+                    value={item.amount}
+                    onChange={(value) =>
+                      updateLineItem(item.fact.id, { value })
+                    }
+                  />
+                  <div className="flex items-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={() => removeLineItem(item.fact.id)}
+                      title="Remove line item"
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Projected Total Investment">
+        <div className="grid gap-3 md:grid-cols-4">
+          <InvestmentMetric
+            label="Purchase"
+            value={draft.estimatedPurchasePrice ?? draft.askingPrice}
+          />
+          <InvestmentMetric label="Renovation" value={expectedEstimate} />
+          <InvestmentMetric label="Contingency" value={contingencyAmount} />
+          <InvestmentMetric label="Closing Costs" value={closingCosts} />
+          <InvestmentMetric label="Projected Total" value={projectedTotal} />
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+function InvestmentMetric({
+  label,
+  value
+}: {
+  label: string;
+  value: number | null;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-card px-3 py-2">
+      <div className="text-xs font-medium uppercase text-muted-foreground">
+        {label}
       </div>
-    </Section>
+      <div className="mt-1 text-lg font-semibold">{formatCurrency(value)}</div>
+    </div>
   );
 }
 

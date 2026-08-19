@@ -286,15 +286,38 @@ function evaluateBudget(
     return;
   }
 
+  const renovationLineItemTotal = [...facts.entries()]
+    .filter(([key]) => key.startsWith("renovation.line_item."))
+    .reduce((total, [, value]) => total + (asNumber(value) ?? 0), 0);
+  const expectedRenovationCost =
+    asNumber(facts.get("renovation.expected_cost")) ??
+    (renovationLineItemTotal > 0 ? renovationLineItemTotal : null);
   const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+  const contingencyAmount = asNumber(facts.get("renovation.contingency_amount"));
+  const closingCosts = asNumber(facts.get("finance.closing_costs"));
+  const storedProjectedTotal = asNumber(
+    facts.get("finance.projected_total_investment")
+  );
   const projectedTotal =
-    asNumber(facts.get("finance.projected_total_investment")) ??
-    (basePrice !== null
-      ? basePrice + (asNumber(facts.get("renovation.expected_cost")) ?? 0)
+    storedProjectedTotal ??
+    (basePrice !== null && expectedRenovationCost !== null
+      ? basePrice +
+        expectedRenovationCost +
+        (contingencyAmount ?? 0) +
+        (closingCosts ?? 0)
       : null);
 
   if (projectedTotal === null) {
-    missingData.push("Asking price or estimated purchase price is missing.");
+    if (basePrice === null) {
+      missingData.push("Asking price or estimated purchase price is missing.");
+    }
+
+    if (storedProjectedTotal === null && expectedRenovationCost === null) {
+      missingData.push(
+        "Expected renovation cost is missing for total investment scoring."
+      );
+    }
+
     return;
   }
 
