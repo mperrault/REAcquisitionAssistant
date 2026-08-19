@@ -139,6 +139,41 @@ describe("property scoring", () => {
     );
   });
 
+  it("matches slash-separated town preference aliases for imported listings", () => {
+    for (const city of ["Stafford", "Stafford Springs"]) {
+      const evaluation = evaluateProperty(
+        createPropertyRecord({
+          id: `property-${city}`,
+          city,
+          state: "CT",
+          askingPrice: 250000
+        }),
+        quietCornerSeedProfile,
+        "2026-08-10T22:08:00.000Z",
+        () => `score-${city}`
+      );
+
+      expect(evaluation.normalizedScore).toBeGreaterThan(0);
+      expect(evaluation.positiveFactors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            ruleKey: "location.town_preference",
+            label: "Stafford / Stafford Springs, CT",
+            points: expect.any(Number)
+          })
+        ])
+      );
+      expect(evaluation.penalties).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            ruleKey: "location.town_preference",
+            detail: "Town is not ranked in the selected profile"
+          })
+        ])
+      );
+    }
+  });
+
   it("hard rejects drive time above the profile maximum", () => {
     const property = createPropertyRecord({
       id: "property-3",

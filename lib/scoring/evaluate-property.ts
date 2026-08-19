@@ -3,6 +3,7 @@ import type {
   ProfileCategory,
   SearchProfile
 } from "@/lib/profiles/types";
+import { matchesTownPreference } from "@/lib/profiles/town-matching";
 import type { PropertyRecord } from "@/lib/properties/types";
 import {
   type RuleResult,
@@ -191,8 +192,7 @@ function evaluateLocation(
   const townPreference = profile.townPreferences.find(
     (preference) =>
       preference.enabled &&
-      preference.town.toLowerCase() === property.city.toLowerCase() &&
-      preference.state.toLowerCase() === property.state.toLowerCase()
+      matchesTownPreference(preference, property.city, property.state)
   );
   const maxTownWeight = Math.max(
     1,

@@ -3,7 +3,11 @@ import {
   type ListingAlertState,
   type ListingCandidate
 } from "@/lib/listing-alerts/types";
-import type { SearchProfile, TownPreference } from "@/lib/profiles/types";
+import {
+  createTownMatchKey,
+  splitTownPreferenceAliases
+} from "@/lib/profiles/town-matching";
+import type { SearchProfile } from "@/lib/profiles/types";
 
 export const OUTSIDE_PROFILE_GEOGRAPHY_WARNING =
   "Outside active profile geography.";
@@ -13,27 +17,6 @@ export type ListingCandidateGeographyFilterResult = {
   ignoredCount: number;
 };
 
-function normalizeGeographyText(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/&nbsp;/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function createTownKey(town: string, state: string) {
-  return `${normalizeGeographyText(town)}|${normalizeGeographyText(state)}`;
-}
-
-function splitTownAliases(townPreference: TownPreference) {
-  return townPreference.town
-    .split(/\s*\/\s*|\s+\bor\b\s+/i)
-    .map(normalizeGeographyText)
-    .filter(Boolean);
-}
-
 function createEnabledTownKeySet(profile: SearchProfile | null) {
   const townKeys = new Set<string>();
 
@@ -42,8 +25,8 @@ function createEnabledTownKeySet(profile: SearchProfile | null) {
       continue;
     }
 
-    for (const townAlias of splitTownAliases(townPreference)) {
-      townKeys.add(createTownKey(townAlias, townPreference.state));
+    for (const townAlias of splitTownPreferenceAliases(townPreference)) {
+      townKeys.add(createTownMatchKey(townAlias, townPreference.state));
     }
   }
 
@@ -62,7 +45,7 @@ function shouldIgnoreCandidateForGeography(
     return false;
   }
 
-  return !townKeys.has(createTownKey(candidate.city, candidate.state));
+  return !townKeys.has(createTownMatchKey(candidate.city, candidate.state));
 }
 
 function addWarning(warnings: string[], warning: string) {
@@ -86,7 +69,7 @@ export function isListingCandidateInsideProfileGeography(
     return true;
   }
 
-  return townKeys.has(createTownKey(candidate.city, candidate.state));
+  return townKeys.has(createTownMatchKey(candidate.city, candidate.state));
 }
 
 export function applyListingCandidateGeographyFilter(
