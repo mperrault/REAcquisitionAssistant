@@ -123,6 +123,7 @@ describe("profile persistence", () => {
 
     draft.name = "Edited Quiet Corner";
     draft.budget.totalProjectBudgetTarget = 425000;
+    draft.commute.anchorAddress = "100 Main St, Stafford Springs, CT";
     draft.commute.maxMinutes = 38;
     draft.acreage.minimumAcres = 2.5;
     draft.townPreferences[0] = {
@@ -159,6 +160,9 @@ describe("profile persistence", () => {
     expect(profile.name).toBe("Edited Quiet Corner");
     expect(profile.version).toBe(2);
     expect(profile.budget.totalProjectBudgetTarget).toBe(425000);
+    expect(profile.commute.anchorAddress).toBe(
+      "100 Main St, Stafford Springs, CT"
+    );
     expect(profile.commute.maxMinutes).toBe(38);
     expect(profile.acreage.minimumAcres).toBe(2.5);
     expect(profile.townPreferences[0]?.town).toBe("Stafford");
@@ -169,6 +173,34 @@ describe("profile persistence", () => {
     expect(profile.categoryWeights[0]?.weight).toBe(21);
     expect(profile.scoreThresholds[0]?.label).toBe("Must See");
     expect(profile.scoreThresholds[0]?.minimumScore).toBe(92);
+  });
+
+  it("loads stored profiles that predate commute anchor addresses", () => {
+    const storage = new MemoryStorage();
+    const state = createDefaultProfileState();
+    const legacyProfile = cloneProfile(firstProfile(state));
+    const legacyProfileJson = JSON.parse(JSON.stringify(legacyProfile)) as Record<
+      string,
+      unknown
+    >;
+    const legacyCommute = legacyProfileJson.commute as Record<string, unknown>;
+
+    delete legacyCommute.anchorAddress;
+
+    storage.setItem(
+      PROFILE_STORAGE_KEY,
+      JSON.stringify({
+        schemaVersion: 1,
+        activeProfileId: legacyProfile.id,
+        profiles: [legacyProfileJson]
+      })
+    );
+
+    const result = loadProfileState(storage);
+    const profile = firstProfile(result.state);
+
+    expect(result.source).toBe("storage");
+    expect(profile.commute.anchorAddress).toBe("");
   });
 
   it("keeps only one active profile after duplication and activation", () => {

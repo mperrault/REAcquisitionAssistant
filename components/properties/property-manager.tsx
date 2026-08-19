@@ -9,10 +9,12 @@ import {
   FileText,
   Home,
   LinkIcon,
+  MapPin,
   Plus,
   RotateCcw,
   Save,
   Search,
+  Sparkles,
   Trash2,
   Wrench
 } from "lucide-react";
@@ -26,6 +28,8 @@ import { Select } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { calculateDriveTimeResponseSchema } from "@/lib/commute/drive-time";
+import { listingCandidateEnrichmentResponseSchema } from "@/lib/listing-alerts/listing-enrichment";
 import {
   PROPERTY_STORAGE_KEY,
   createEmptyPropertyState,
@@ -57,7 +61,7 @@ import {
   propertyFactSourceOptions
 } from "@/lib/properties/types";
 import { loadProfileState } from "@/lib/profiles/profile-persistence";
-import type { ProfileState } from "@/lib/profiles/types";
+import type { ProfileState, SearchProfile } from "@/lib/profiles/types";
 import { evaluateProperty } from "@/lib/scoring/evaluate-property";
 import {
   addScoreEvaluation,
@@ -208,6 +212,178 @@ function formatScoreGapCount(count: number) {
   return `${count} ${count === 1 ? "score gap" : "score gaps"}`;
 }
 
+function createPropertyEnrichmentCandidate(property: PropertyRecord) {
+  return {
+    id: property.id,
+    listingUrl: property.listingUrl.trim(),
+    addressLine1: property.addressLine1,
+    city: property.city,
+    state: property.state,
+    postalCode: property.postalCode,
+    askingPrice: property.askingPrice,
+    primaryPhotoUrl: property.primaryPhotoUrl,
+    photoUrls: property.photoUrls
+  };
+}
+
+function mergeEnrichmentIntoProperty(
+  property: PropertyRecord,
+  enrichment: ReturnType<typeof listingCandidateEnrichmentResponseSchema.parse>
+) {
+  const shouldApplyPrice =
+    property.askingPrice === null && enrichment.updates.askingPrice !== null;
+  const shouldApplyPhoto =
+    !property.primaryPhotoUrl && Boolean(enrichment.updates.primaryPhotoUrl);
+  const primaryPhotoUrl = shouldApplyPhoto
+    ? enrichment.updates.primaryPhotoUrl
+    : property.primaryPhotoUrl;
+  const photoUrls = Array.from(
+    new Set([
+      ...(primaryPhotoUrl ? [primaryPhotoUrl] : []),
+      ...enrichment.updates.photoUrls,
+      ...property.photoUrls
+    ])
+  );
+
+  return {
+    property: refreshInvestmentFacts({
+      ...property,
+      askingPrice: shouldApplyPrice
+        ? enrichment.updates.askingPrice
+        : property.askingPrice,
+      primaryPhotoUrl,
+      photoUrls,
+      updatedAt:
+        shouldApplyPrice || shouldApplyPhoto
+          ? enrichment.fetchedAt
+          : property.updatedAt
+    }),
+    changed: shouldApplyPrice || shouldApplyPhoto,
+    appliedFields: [
+      shouldApplyPrice ? "price" : null,
+      shouldApplyPhoto ? "photo" : null
+    ].filter(Boolean) as string[]
+  };
+}
+
+function createDriveTimeRequest(
+  property: PropertyRecord,
+  profile: SearchProfile
+) {
+  return {
+    property: {
+      id: property.id,
+      addressLine1: property.addressLine1,
+      city: property.city,
+      state: property.state,
+      postalCode: property.postalCode
+    },
+    commute: {
+      anchorAddress: profile.commute.anchorAddress,
+      anchorLat: profile.commute.anchorLat,
+      anchorLng: profile.commute.anchorLng
+    }
+  };
+}
+
+function upsertSourcedNumberFact(
+  facts: PropertyFact[],
+  factKey: string,
+  label: string,
+  value: number | null,
+  sourceReference: string,
+  observedAt: string
+) {
+  if (value === null) {
+    return facts;
+  }
+
+  const existingFact = facts.find((fact) => fact.factKey === factKey);
+  const nextFact = {
+    ...(existingFact ??
+      createPropertyFact({
+        factKey,
+        label,
+        value,
+        sourceType: "api",
+        sourceReference
+      })),
+    label,
+    value,
+    sourceType: "api" as const,
+    sourceReference,
+    confidence: 0.8,
+    verified: false,
+    observedAt
+  };
+
+  if (existingFact) {
+    return facts.map((fact) => (fact.id === existingFact.id ? nextFact : fact));
+  }
+
+  return [...facts, nextFact];
+}
+
+function mergeDriveTimeIntoProperty(
+  property: PropertyRecord,
+  driveTime: ReturnType<typeof calculateDriveTimeResponseSchema.parse>
+) {
+  if (property.id !== driveTime.propertyId || driveTime.driveTimeMinutes === null) {
+    return {
+      property,
+      changed: false
+    };
+  }
+
+  const routeReference =
+    driveTime.origin && driveTime.destination
+      ? `${driveTime.origin.label} to ${driveTime.destination.label}`
+      : "Calculated commute route";
+  let facts = upsertSourcedNumberFact(
+    property.facts,
+    "location.drive_time_minutes",
+    "Drive time",
+    driveTime.driveTimeMinutes,
+    routeReference,
+    driveTime.calculatedAt
+  );
+  facts = upsertSourcedNumberFact(
+    facts,
+    "location.drive_distance_miles",
+    "Drive distance",
+    driveTime.distanceMiles,
+    routeReference,
+    driveTime.calculatedAt
+  );
+
+  return {
+    property: {
+      ...property,
+      facts,
+      updatedAt: driveTime.calculatedAt
+    },
+    changed: true
+  };
+}
+
+function canCalculateDriveTime(
+  property: PropertyRecord | null,
+  profile: SearchProfile | null
+) {
+  if (!property || !profile) {
+    return false;
+  }
+
+  const hasPropertyAddress = Boolean(
+    property.addressLine1.trim() && property.city.trim() && property.state.trim()
+  );
+  const hasAnchor =
+    Boolean(profile.commute.anchorAddress.trim()) ||
+    (profile.commute.anchorLat !== null && profile.commute.anchorLng !== null);
+
+  return hasPropertyAddress && hasAnchor;
+}
+
 function formatScoreSummaryTitle(evaluation: ScoreEvaluation) {
   const parts = [
     `${evaluation.scoreLabel}: ${evaluation.normalizedScore}/100`,
@@ -293,6 +469,9 @@ export function PropertyManager() {
     React.useState<PropertyScoreFilter>("all");
   const [sortMode, setSortMode] =
     React.useState<PropertySortMode>("updated_desc");
+  const [isEnrichingProperty, setIsEnrichingProperty] = React.useState(false);
+  const [isCalculatingDriveTime, setIsCalculatingDriveTime] =
+    React.useState(false);
   const [loadSource, setLoadSource] = React.useState<"storage" | "empty" | "reset">(
     "empty"
   );
@@ -480,6 +659,149 @@ export function PropertyManager() {
     persistState(savedPropertyState, draft.id);
     setSaveStatus("Scored");
     setActiveTab("scoring");
+  }
+
+  async function handleEnrichProperty() {
+    if (!draft || !draft.listingUrl.trim()) {
+      return;
+    }
+
+    setIsEnrichingProperty(true);
+    setSaveStatus("Enriching");
+
+    try {
+      const response = await fetch("/api/listing-alerts/enrich-listing", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          candidate: createPropertyEnrichmentCandidate(draft)
+        })
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        const message =
+          payload && typeof payload.error === "string"
+            ? payload.error
+            : "Unable to enrich property.";
+        throw new Error(message);
+      }
+
+      const enrichment = listingCandidateEnrichmentResponseSchema.parse(payload);
+      const merged = mergeEnrichmentIntoProperty(draft, enrichment);
+      const nextPropertyState = upsertProperty(propertyState, merged.property);
+      const persistedState = savePropertyState(
+        window.localStorage,
+        nextPropertyState
+      );
+
+      setPropertyState(persistedState);
+      setDraft(cloneProperty(merged.property));
+      setSelectedPropertyId(merged.property.id);
+      setLoadSource("storage");
+
+      if (activeProfile) {
+        const evaluation = evaluateProperty(merged.property, activeProfile);
+        const nextScoreState = addScoreEvaluation(scoreState, evaluation);
+        const persistedScores = saveScoreState(
+          window.localStorage,
+          nextScoreState
+        );
+
+        setScoreState(persistedScores);
+        setActiveTab("scoring");
+      }
+
+      const warningSuffix =
+        enrichment.warnings.length > 0
+          ? ` (${enrichment.warnings.length} warning${
+              enrichment.warnings.length === 1 ? "" : "s"
+            })`
+          : "";
+
+      setSaveStatus(
+        merged.changed
+          ? `Enriched ${merged.appliedFields.join(", ")}${warningSuffix}`
+          : `No new data${warningSuffix}`
+      );
+    } catch (error) {
+      setSaveStatus(error instanceof Error ? error.message : "Enrich failed");
+    } finally {
+      setIsEnrichingProperty(false);
+    }
+  }
+
+  async function handleCalculateDriveTime() {
+    if (!draft || !activeProfile || !canCalculateDriveTime(draft, activeProfile)) {
+      return;
+    }
+
+    setIsCalculatingDriveTime(true);
+    setSaveStatus("Calculating drive time");
+
+    try {
+      const response = await fetch("/api/properties/calculate-drive-time", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(createDriveTimeRequest(draft, activeProfile))
+      });
+      const payload = await response.json();
+
+      if (!response.ok) {
+        const message =
+          payload && typeof payload.error === "string"
+            ? payload.error
+            : "Unable to calculate drive time.";
+        throw new Error(message);
+      }
+
+      const driveTime = calculateDriveTimeResponseSchema.parse(payload);
+      const merged = mergeDriveTimeIntoProperty(draft, driveTime);
+
+      if (!merged.changed) {
+        setSaveStatus(
+          driveTime.warnings.length > 0
+            ? driveTime.warnings.join(" ")
+            : "No drive time calculated"
+        );
+        return;
+      }
+
+      const nextPropertyState = upsertProperty(propertyState, merged.property);
+      const persistedState = savePropertyState(
+        window.localStorage,
+        nextPropertyState
+      );
+      const evaluation = evaluateProperty(merged.property, activeProfile);
+      const nextScoreState = addScoreEvaluation(scoreState, evaluation);
+      const persistedScores = saveScoreState(window.localStorage, nextScoreState);
+
+      setPropertyState(persistedState);
+      setDraft(cloneProperty(merged.property));
+      setSelectedPropertyId(merged.property.id);
+      setScoreState(persistedScores);
+      setLoadSource("storage");
+      setActiveTab("scoring");
+      setSaveStatus(
+        `Drive time ${driveTime.driveTimeMinutes} min${
+          driveTime.warnings.length > 0
+            ? ` (${driveTime.warnings.length} warning${
+                driveTime.warnings.length === 1 ? "" : "s"
+              })`
+            : ""
+        }`
+      );
+    } catch (error) {
+      setSaveStatus(
+        error instanceof Error ? error.message : "Drive time calculation failed"
+      );
+    } finally {
+      setIsCalculatingDriveTime(false);
+    }
   }
 
   function handleDelete() {
@@ -749,6 +1071,34 @@ export function PropertyManager() {
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleEnrichProperty}
+                  disabled={
+                    !draft || !draft.listingUrl.trim() || isEnrichingProperty
+                  }
+                >
+                  <Sparkles aria-hidden="true" />
+                  {isEnrichingProperty ? "Enriching" : "Enrich"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCalculateDriveTime}
+                  disabled={
+                    !canCalculateDriveTime(draft, activeProfile) ||
+                    isCalculatingDriveTime
+                  }
+                  title={
+                    canCalculateDriveTime(draft, activeProfile)
+                      ? "Calculate drive time from this property to the active profile commute anchor"
+                      : "Add a property address and active profile commute anchor first"
+                  }
+                >
+                  <MapPin aria-hidden="true" />
+                  {isCalculatingDriveTime ? "Calculating" : "Drive Time"}
+                </Button>
                 <Button
                   type="button"
                   variant="outline"

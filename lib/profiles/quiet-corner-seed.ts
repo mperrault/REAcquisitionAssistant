@@ -166,6 +166,7 @@ export const quietCornerSeedProfile: SearchProfile = {
   },
   commute: {
     anchorLabel: "Commute anchor",
+    anchorAddress: "",
     anchorLat: null,
     anchorLng: null,
     idealMinutes: 30,

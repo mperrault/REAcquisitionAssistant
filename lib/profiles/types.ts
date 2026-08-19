@@ -80,6 +80,7 @@ export type BudgetSettings = z.infer<typeof budgetSettingsSchema>;
 
 export const commuteSettingsSchema = z.object({
   anchorLabel: z.string(),
+  anchorAddress: z.string().default(""),
   anchorLat: z.number().nullable(),
   anchorLng: z.number().nullable(),
   idealMinutes: z.number().int().nonnegative(),
