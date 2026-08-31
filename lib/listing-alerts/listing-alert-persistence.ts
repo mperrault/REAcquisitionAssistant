@@ -419,6 +419,15 @@ export function reprocessListingAlertMessages(
   let candidatesUpdated = 0;
   const reprocessedCandidateKeys = new Set<string>();
   const warnings: string[] = [];
+  const existingSourceCandidatesByKey = new Map(
+    state.candidates
+      .filter((candidate) => candidate.sourceId === sourceId)
+      .map((candidate) => [normalizeListingCandidateKey(candidate), candidate])
+  );
+
+  nextCandidates = state.candidates.filter(
+    (candidate) => candidate.sourceId !== sourceId
+  );
 
   for (const message of messages) {
     const parserInput = [message.subject, message.bodyText]
@@ -444,19 +453,49 @@ export function reprocessListingAlertMessages(
     );
 
     nextCandidates = upsertedCandidates.candidates;
-    candidatesCreated += upsertedCandidates.candidatesCreated;
-    candidatesUpdated += upsertedCandidates.candidatesUpdated;
     warnings.push(
       ...parseResult.warnings,
       ...parsedCandidates.flatMap((candidate) => candidate.warnings)
     );
   }
 
-  nextCandidates = nextCandidates.filter(
-    (candidate) =>
-      candidate.sourceId !== sourceId ||
-      candidate.status === "imported" ||
-      reprocessedCandidateKeys.has(normalizeListingCandidateKey(candidate))
+  candidatesCreated = Array.from(reprocessedCandidateKeys).filter(
+    (key) => !existingSourceCandidatesByKey.has(key)
+  ).length;
+  candidatesUpdated = Array.from(reprocessedCandidateKeys).filter((key) =>
+    existingSourceCandidatesByKey.has(key)
+  ).length;
+
+  nextCandidates = [
+    ...nextCandidates.map((candidate) => {
+      if (candidate.sourceId !== sourceId) {
+        return candidate;
+      }
+
+      const existing = existingSourceCandidatesByKey.get(
+        normalizeListingCandidateKey(candidate)
+      );
+
+      return existing
+        ? listingCandidateSchema.parse({
+            ...candidate,
+            id: existing.id,
+            status: existing.status,
+            importedPropertyId: existing.importedPropertyId,
+            createdAt: existing.createdAt,
+            updatedAt: timestamp
+          })
+        : candidate;
+    }),
+    ...Array.from(existingSourceCandidatesByKey.entries())
+      .filter(
+        ([key, candidate]) =>
+          candidate.status === "imported" && !reprocessedCandidateKeys.has(key)
+      )
+      .map(([, candidate]) => candidate)
+  ].sort(
+    (a, b) =>
+      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
   );
 
   const run = listingAlertRunSchema.parse({

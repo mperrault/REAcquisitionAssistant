@@ -336,14 +336,18 @@ function htmlToText(value: string) {
   );
 }
 
-function getImageForwardCardText(html: string, index: number) {
+function getImageForwardCardContext(html: string, index: number) {
   const nextImageMatch = html.slice(index + 1).match(/<img\b/i);
   const end =
     nextImageMatch?.index === undefined
       ? Math.min(html.length, index + 4000)
       : index + 1 + nextImageMatch.index;
+  const htmlSlice = html.slice(index, end);
+  const linkedUrls = extractUrls(htmlSlice).filter(
+    (url) => !isLikelyImageAssetUrl(url)
+  );
 
-  return htmlToText(html.slice(index, end));
+  return [htmlToText(htmlSlice), ...linkedUrls].filter(Boolean).join(" ");
 }
 
 function getContainingElementRange(html: string, index: number, tagName: string) {
@@ -487,7 +491,7 @@ function getImageCandidatesFromHtml(html: string) {
         getHtmlAttribute(tag, "title"),
         getHtmlAttribute(tag, "aria-label")
       ].filter(Boolean);
-      const forwardCardText = getImageForwardCardText(
+      const forwardCardContext = getImageForwardCardContext(
         htmlVariant,
         match.index ?? 0
       );
@@ -500,23 +504,25 @@ function getImageCandidatesFromHtml(html: string) {
         match.index ?? 0,
         tag
       );
+      const containerHasListingUrl =
+        extractComparableUrlKeys(containerContext).length > 0;
       const context =
         semanticLabels.length > 0
           ? [tag, ...semanticLabels].join(" ")
           : columnDetailContext
             ? [containerContext, columnDetailContext].join(" ")
-          : hasAddressLikeText(containerContext)
+          : containerHasListingUrl || hasAddressLikeText(containerContext)
             ? containerContext
-            : [containerContext, forwardCardText].join(" ");
+            : [containerContext, forwardCardContext].join(" ");
       const supplementalText = [
         containerContext,
         columnDetailContext,
-        forwardCardText,
+        forwardCardContext,
         getNearbyHtmlContext(htmlVariant, match.index ?? 0, tag.length)
       ].join(" ");
       const supplementalPrice =
         extractPrice(columnDetailContext) ??
-        extractPrice(forwardCardText) ??
+        extractPrice(forwardCardContext) ??
         extractPrice(containerContext);
 
       for (const attributeName of [
@@ -780,6 +786,19 @@ function normalizeComparableUrlKey(value: string) {
     ) {
       return `${hostname}:${pathParts[pathParts.length - 1].toLowerCase()}`;
     }
+
+    const normalizedUrl = normalizeUrl(cleanedValue);
+    const normalizedParsedUrl = new URL(normalizedUrl);
+    const zillowZpidMatch = normalizedParsedUrl.pathname.match(
+      /\/(?:zpid_target\/)?([^/]+_zpid)\b/i
+    );
+
+    if (
+      zillowZpidMatch?.[1] &&
+      /\.?zillow\.com$/i.test(normalizedParsedUrl.hostname)
+    ) {
+      return `zillow:${zillowZpidMatch[1].toLowerCase()}`;
+    }
   } catch {
     return "";
   }
@@ -855,7 +874,8 @@ function scorePhotoBlockMatch(
 function selectPhotosForBlock(
   block: string,
   photoCandidates: ExtractedPhotoCandidate[],
-  usedPhotoKeys: Set<string>
+  usedPhotoKeys: Set<string>,
+  allowOrderFallback = true
 ) {
   const normalizedBlock = normalizeText(block);
   const address = extractAddress(normalizedBlock);
@@ -875,9 +895,11 @@ function selectPhotosForBlock(
         scorePhotoBlockMatch(normalizedBlock, address, photo) > 0
     );
 
-  return scoredMatches.length > 0
-    ? [scoredMatches[0].photo]
-    : fallbackPhotos.slice(0, 1);
+  if (scoredMatches.length > 0) {
+    return [scoredMatches[0].photo];
+  }
+
+  return allowOrderFallback ? fallbackPhotos.slice(0, 1) : [];
 }
 
 function extractPhotoUrlsFromBlock(block: string) {
@@ -1453,20 +1475,17 @@ export function normalizeListingCandidateKey(candidate: {
   city: string;
   state: string;
 }) {
-  if (candidate.mlsId) {
-    return `mls:${candidate.mlsId.toLowerCase()}`;
-  }
-
   if (candidate.addressLine1) {
     return [
       "address",
-      candidate.addressLine1,
-      candidate.city,
-      candidate.state
-    ]
-      .join(":")
-      .toLowerCase()
-      .replace(/[^a-z0-9:]+/g, "-");
+      normalizeAddressKeyText(candidate.addressLine1),
+      normalizeLocationKeyText(candidate.city),
+      normalizeLocationKeyText(candidate.state)
+    ].join(":");
+  }
+
+  if (candidate.mlsId) {
+    return `mls:${candidate.mlsId.toLowerCase()}`;
   }
 
   if (candidate.listingUrl) {
@@ -1477,6 +1496,62 @@ export function normalizeListingCandidateKey(candidate: {
     .join(":")
     .toLowerCase()
     .replace(/[^a-z0-9:]+/g, "-");
+}
+
+const streetTokenAliases: Record<string, string> = {
+  avenue: "ave",
+  ave: "ave",
+  boulevard: "blvd",
+  blvd: "blvd",
+  circle: "cir",
+  cir: "cir",
+  court: "ct",
+  ct: "ct",
+  drive: "dr",
+  dr: "dr",
+  highway: "hwy",
+  hwy: "hwy",
+  lane: "ln",
+  ln: "ln",
+  place: "pl",
+  pl: "pl",
+  road: "rd",
+  rd: "rd",
+  route: "rt",
+  rt: "rt",
+  street: "st",
+  st: "st",
+  terrace: "ter",
+  ter: "ter",
+  trail: "trl",
+  trl: "trl",
+  turnpike: "tpke",
+  tpke: "tpke"
+};
+
+const directionalTokenAliases: Record<string, string> = {
+  east: "e",
+  north: "n",
+  northeast: "ne",
+  northwest: "nw",
+  south: "s",
+  southeast: "se",
+  southwest: "sw",
+  west: "w"
+};
+
+function normalizeAddressKeyText(value: string) {
+  return normalizeComparableText(value)
+    .split(" ")
+    .map(
+      (token) =>
+        streetTokenAliases[token] ?? directionalTokenAliases[token] ?? token
+    )
+    .join("-");
+}
+
+function normalizeLocationKeyText(value: string) {
+  return normalizeComparableText(value).replace(/\s+/g, "-");
 }
 
 function mergeCandidateWarnings(candidate: ListingCandidateExtract) {
@@ -1579,12 +1654,17 @@ export function parseListingAlertText(input: string, options: ParseOptions = {})
   const candidatesByKey = new Map<string, ListingCandidateExtract>();
   const photoCandidates = extractPhotoCandidatesFromHtml(options.bodyHtml ?? "");
   const usedPhotoKeys = new Set<string>();
+  const blocks = splitCandidateBlocks(normalizedInput);
+  const allowOrderFallbackPhotoMatching = !(
+    isLikelyZillowAlert(normalizedInput) && blocks.length > 1
+  );
 
-  for (const block of splitCandidateBlocks(normalizedInput)) {
+  for (const block of blocks) {
     const candidatePhotos = selectPhotosForBlock(
       block,
       photoCandidates,
-      usedPhotoKeys
+      usedPhotoKeys,
+      allowOrderFallbackPhotoMatching
     );
     const candidatePhotoUrls = Array.from(
       new Set([

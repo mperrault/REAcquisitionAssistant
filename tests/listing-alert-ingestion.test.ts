@@ -176,6 +176,25 @@ const zillowDigestAlertHtml = `<html>
     <img src="https://www.zillowstatic.com/bedrock/app/uploads/sites/36/2024/03/icon_house.png" alt="House Icon" />
   </body>
 </html>`;
+const zillowOpenHouseWillingtonUrl = zillowRedirectUrl("66000001");
+const zillowOpenHouseWhiteRoadUrl = zillowRedirectUrl("91000001");
+const zillowOpenHouseDigestText = `Plan Your Weekend: 10 open houses - For Sale near Stafford Springs CT 06076
+
+For sale
+$399,900
+4 bd | 2 ba | 1,576 sqft
+66 Willington Avenue, Stafford, CT
+Open house: Sun. 1pm-3pm Berkshire Hathaway NE Prop.
+View this listing -
+${zillowOpenHouseWillingtonUrl}
+
+For sale
+$289,900
+2 bd | 2 ba | 980 sqft
+91 White Road, Ellington, CT
+Open house: Sat. 10am-12pm Campbell-Keune Realty Inc
+View this listing -
+${zillowOpenHouseWhiteRoadUrl}`;
 
 describe("listing alert ingestion", () => {
   it("extracts listing candidates from saved-search alert text", () => {
@@ -258,6 +277,56 @@ describe("listing alert ingestion", () => {
     expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual(
       zillowDigestPhotoUrls
     );
+  });
+
+  it("matches Zillow digest photos by listing link when images omit address labels", () => {
+    const result = parseListingAlertText(
+      zillowOpenHouseDigestText,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <a href="${zillowOpenHouseWhiteRoadUrl}"><img src="${zillowDigestPhotoUrls[1]}" /></a>
+          <a href="${zillowOpenHouseWillingtonUrl}"><img src="${zillowDigestPhotoUrls[0]}" /></a>
+        </body></html>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(2);
+    expect(
+      result.candidates.map((candidate) => candidate.addressLine1)
+    ).toEqual(["66 Willington Avenue", "91 White Road"]);
+    expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual(
+      zillowDigestPhotoUrls
+    );
+  });
+
+  it("does not use order fallback for Zillow digest photos without listing context", () => {
+    const result = parseListingAlertText(
+      zillowOpenHouseDigestText,
+      {
+        timestamp,
+        createId: deterministicIds("fact"),
+        bodyHtml: `<html><body>
+          <img src="${zillowDigestPhotoUrls[0]}" />
+          <img src="${zillowDigestPhotoUrls[1]}" />
+        </body></html>`
+      }
+    );
+
+    expect(result.candidates).toHaveLength(2);
+    expect(
+      result.candidates.map((candidate) => candidate.addressLine1)
+    ).toEqual(["66 Willington Avenue", "91 White Road"]);
+    expect(result.candidates.map((candidate) => candidate.primaryPhotoUrl)).toEqual([
+      "",
+      ""
+    ]);
+    expect(
+      result.candidates.every((candidate) =>
+        candidate.warnings.includes(NO_MATCHING_PROPERTY_PHOTO_WARNING)
+      )
+    ).toBe(true);
   });
 
   it("extracts escaped Zillow photo URLs from alert HTML", () => {
@@ -830,6 +899,78 @@ https://www.realtor.com/realestateandhomes-detail/47-High-St_Stafford_CT_06076_M
     expect(secondRun.state.messages).toHaveLength(2);
   });
 
+  it("deduplicates street suffix variants across listing sources", () => {
+    const zillowSource = createListingAlertSource(
+      {
+        id: "source-zillow-willington",
+        name: "Zillow Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const realtorSource = createListingAlertSource(
+      {
+        id: "source-realtor-willington",
+        name: "Realtor Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      upsertListingAlertSource(
+        createEmptyListingAlertState(),
+        zillowSource,
+        timestamp
+      ),
+      realtorSource,
+      timestamp
+    );
+    const firstRun = ingestListingAlertText(
+      initialState,
+      zillowSource.id,
+      {
+        externalMessageId: "zillow-willington",
+        subject: "Zillow open house",
+        from: "Zillow <instant-updates@mail.zillow.com>",
+        receivedAt: timestamp,
+        bodyText: `For sale
+$399,900
+4 bd | 2 ba | 1,576 sqft
+66 Willington Avenue, Stafford, CT
+View this listing -
+${zillowOpenHouseWillingtonUrl}`
+      },
+      timestamp,
+      deterministicIds("zillow")
+    );
+    const secondRun = ingestListingAlertText(
+      firstRun.state,
+      realtorSource.id,
+      {
+        externalMessageId: "realtor-willington",
+        subject: "Realtor open house",
+        from: '"realtor.com" <info@notifications.realtor.com>',
+        receivedAt: timestamp,
+        bodyText: `66 Willington Ave, Stafford, CT 06076
+$399,900
+4 bed 2 bath 1,576 sqft
+https://www.realtor.com/realestateandhomes-detail/66-Willington-Ave_Stafford_CT_06076_M12345`
+      },
+      timestamp,
+      deterministicIds("realtor")
+    );
+    const willingtonCandidates = secondRun.state.candidates.filter(
+      (candidate) => candidate.addressLine1.includes("Willington")
+    );
+
+    expect(firstRun.run.candidatesCreated).toBe(1);
+    expect(secondRun.run.candidatesCreated).toBe(0);
+    expect(secondRun.run.candidatesUpdated).toBe(1);
+    expect(willingtonCandidates).toHaveLength(1);
+    expect(willingtonCandidates[0]?.addressLine1).toBe("66 Willington Ave");
+    expect(willingtonCandidates[0]?.city).toBe("Stafford");
+  });
+
   it("does not create duplicate candidates from Realtor price-drop fragments", () => {
     const realtorPriceDropText = `Price dropped to $142,900: 365 East St
 
@@ -992,6 +1133,66 @@ https://www.realtor.com/realestateandhomes-detail/175-W-Stafford-Rd_Stafford_CT_
     expect(reprocessed.run?.messagesSeen).toBe(1);
     expect(reprocessed.state.sources[0]?.lastCheckedAt).toBe(cursorTimestamp);
     expect(reprocessed.state.candidates).toHaveLength(2);
+  });
+
+  it("clears stale Zillow digest photos during reprocess when no match exists", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-stale-zillow-photo",
+        name: "Zillow Alerts"
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const ingested = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-stale-zillow-photo",
+        subject: "Plan Your Weekend",
+        from: "Zillow <instant-updates@mail.zillow.com>",
+        receivedAt: timestamp,
+        bodyText: zillowOpenHouseDigestText,
+        bodyHtml: `<html><body>
+          <img src="${zillowDigestPhotoUrls[0]}" />
+          <img src="${zillowDigestPhotoUrls[1]}" />
+        </body></html>`
+      },
+      timestamp,
+      deterministicIds("ingest")
+    );
+    const stateWithStalePhoto = {
+      ...ingested.state,
+      candidates: ingested.state.candidates.map((candidate) =>
+        candidate.addressLine1 === "91 White Road"
+          ? {
+              ...candidate,
+              primaryPhotoUrl: zillowDigestPhotoUrls[0],
+              photoUrls: [zillowDigestPhotoUrls[0]]
+            }
+          : candidate
+      )
+    };
+    const reprocessed = reprocessListingAlertMessages(
+      stateWithStalePhoto,
+      source.id,
+      "2026-08-11T01:00:00.000Z",
+      deterministicIds("reprocess")
+    );
+    const whiteRoad = reprocessed.state.candidates.find(
+      (candidate) => candidate.addressLine1 === "91 White Road"
+    );
+
+    expect(reprocessed.candidatesCreated).toBe(0);
+    expect(reprocessed.candidatesUpdated).toBe(2);
+    expect(whiteRoad?.primaryPhotoUrl).toBe("");
+    expect(whiteRoad?.photoUrls).toEqual([]);
+    expect(whiteRoad?.warnings).toContain(NO_MATCHING_PROPERTY_PHOTO_WARNING);
   });
 
   it("removes stale source candidates that are not emitted during reprocess", () => {
