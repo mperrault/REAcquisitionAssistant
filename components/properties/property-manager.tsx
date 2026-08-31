@@ -327,6 +327,16 @@ function mergeEnrichmentIntoProperty(
   );
   const shouldApplyStyle =
     !property.houseStyle.trim() && Boolean(enrichment.updates.houseStyle);
+  const styleFailureReason =
+    enrichment.warnings
+      .find((warning) => warning.startsWith("House style inference failed:"))
+      ?.replace(/^House style inference failed:\s*/i, "")
+      .trim() ??
+    enrichment.warnings
+      .filter((warning) => warning.toLowerCase().includes("style"))
+      .join(" ")
+      .trim() ??
+    "";
   const facts = shouldApplyStyle
     ? upsertInferredStyleFact(
         property.facts.filter((fact) => fact.factKey !== "style.inference_error"),
@@ -342,9 +352,7 @@ function mergeEnrichmentIntoProperty(
           property.facts,
           "style.inference_error",
           "House style inference issue",
-          enrichment.warnings
-            .filter((warning) => warning.toLowerCase().includes("style"))
-            .join(" ") || "Enrichment did not identify a house style.",
+          styleFailureReason || "listing text and photo inference did not identify a style.",
           "Listing enrichment",
           enrichment.fetchedAt
         )

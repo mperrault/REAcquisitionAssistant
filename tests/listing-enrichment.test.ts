@@ -131,7 +131,25 @@ describe("listing page enrichment", () => {
     expect(result.updates.styleConfidence).toBe(0.85);
     expect(result.updates.styleSource).toBe("listing_text");
     expect(result.warnings).not.toContain(
-      "Photo style inference skipped because OPENAI_API_KEY is not configured."
+      "House style inference failed: listing text did not identify a style; photo inference skipped because OPENAI_API_KEY is not configured."
+    );
+  });
+
+  it("explains when style text inference fails and no photo can be analyzed", async () => {
+    const result = await enrichListingCandidate(
+      {
+        ...baseCandidate,
+        inferStyle: true
+      },
+      async () =>
+        createFetchResponse(`<html>
+          <body>47 High St Stafford CT 06076 Detached home.</body>
+        </html>`)
+    );
+
+    expect(result.updates.houseStyle).toBe("");
+    expect(result.warnings).toContain(
+      "House style inference failed: listing text did not identify a style; no eligible exterior photo URL was available for photo inference."
     );
   });
 

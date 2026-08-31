@@ -333,7 +333,7 @@ describe("property scoring", () => {
           factKey: "style.inference_error",
           label: "House style inference issue",
           value:
-            "Photo style inference skipped because OPENAI_API_KEY is not configured."
+            "listing text did not identify a style; photo inference skipped because OPENAI_API_KEY is not configured."
         })
       ]
     });
@@ -346,7 +346,7 @@ describe("property scoring", () => {
     );
 
     expect(evaluation.missingData).toContain(
-      "House style is missing: Photo style inference skipped because OPENAI_API_KEY is not configured."
+      "House style is missing: listing text did not identify a style; photo inference skipped because OPENAI_API_KEY is not configured."
     );
   });
 

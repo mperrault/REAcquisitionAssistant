@@ -344,13 +344,16 @@ async function inferHouseStyleFromPhotos(
     .slice(0, 3);
 
   if (imageUrls.length === 0) {
-    return { style: null, warning: "No eligible exterior photo URL for style inference." };
+    return {
+      style: null,
+      warning: "no eligible exterior photo URL was available for photo inference"
+    };
   }
 
   if (!apiKey) {
     return {
       style: null,
-      warning: "Photo style inference skipped because OPENAI_API_KEY is not configured."
+      warning: "photo inference skipped because OPENAI_API_KEY is not configured"
     };
   }
 
@@ -387,7 +390,7 @@ async function inferHouseStyleFromPhotos(
   if (!response.ok) {
     return {
       style: null,
-      warning: `Photo style inference failed with HTTP ${response.status}.`
+      warning: `photo inference failed with HTTP ${response.status}`
     };
   }
 
@@ -395,7 +398,7 @@ async function inferHouseStyleFromPhotos(
 
   return {
     style,
-    warning: style ? null : "Photo style inference did not return a confident style."
+    warning: style ? null : "photo inference ran but confidence was below threshold"
   };
 }
 
@@ -624,6 +627,11 @@ export async function enrichListingCandidate(
 
     if (!response.ok) {
       warnings.push(`Listing page fetch failed with HTTP ${response.status}.`);
+      if (parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim()) {
+        warnings.push(
+          `House style inference failed: listing page fetch failed with HTTP ${response.status}.`
+        );
+      }
       return listingCandidateEnrichmentResponseSchema.parse({
         candidateId: parsedCandidate.id,
         listingUrl,
@@ -637,6 +645,11 @@ export async function enrichListingCandidate(
 
     if (!pageMatchesCandidate(parsedCandidate, metadata)) {
       warnings.push("Fetched listing page did not include candidate address.");
+      if (parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim()) {
+        warnings.push(
+          "House style inference failed: fetched listing page did not include the property address."
+        );
+      }
       return listingCandidateEnrichmentResponseSchema.parse({
         candidateId: parsedCandidate.id,
         listingUrl,
@@ -665,6 +678,9 @@ export async function enrichListingCandidate(
             `${metadata.pageText} ${parsedCandidate.listingRemarks}`
           )
         : null;
+    let styleFailureReason = shouldFillStyle && !style
+      ? "listing text did not identify a style"
+      : "";
 
     if (shouldFillStyle && !style) {
       const photoInference = await inferHouseStyleFromPhotos(
@@ -674,7 +690,7 @@ export async function enrichListingCandidate(
       style = photoInference.style;
 
       if (photoInference.warning) {
-        warnings.push(photoInference.warning);
+        styleFailureReason = `${styleFailureReason}; ${photoInference.warning}`;
       }
     }
 
@@ -694,7 +710,7 @@ export async function enrichListingCandidate(
     }
 
     if (shouldFillStyle && !style) {
-      warnings.push("Listing page did not expose a house style.");
+      warnings.push(`House style inference failed: ${styleFailureReason}.`);
     }
 
     return listingCandidateEnrichmentResponseSchema.parse({
@@ -705,11 +721,15 @@ export async function enrichListingCandidate(
       warnings
     });
   } catch (error) {
-    warnings.push(
-      error instanceof Error
-        ? `Listing page fetch failed: ${error.message}`
-        : "Listing page fetch failed."
-    );
+    const message =
+      error instanceof Error ? error.message : "Listing page fetch failed.";
+    warnings.push(`Listing page fetch failed: ${message}`);
+
+    if (parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim()) {
+      warnings.push(
+        `House style inference failed: listing page fetch failed: ${message}`
+      );
+    }
 
     return listingCandidateEnrichmentResponseSchema.parse({
       candidateId: parsedCandidate.id,
