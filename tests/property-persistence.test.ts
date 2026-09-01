@@ -43,6 +43,8 @@ describe("property persistence", () => {
     expect(property.bedrooms).toBeNull();
     expect(property.primaryPhotoUrl).toBe("");
     expect(property.photoUrls).toEqual([]);
+    expect(property.photoEvidence).toEqual([]);
+    expect(property.sourceCaptures).toEqual([]);
     expect(property.lifecycleStatus).toBe("new");
     expect(property.city).toBe("Stafford");
   });

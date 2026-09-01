@@ -48,6 +48,8 @@ export function createPropertyRecord(
     mlsId: patch.mlsId ?? "",
     primaryPhotoUrl: patch.primaryPhotoUrl ?? "",
     photoUrls: patch.photoUrls ?? [],
+    photoEvidence: patch.photoEvidence ?? [],
+    sourceCaptures: patch.sourceCaptures ?? [],
     askingPrice: patch.askingPrice ?? null,
     estimatedPurchasePrice: patch.estimatedPurchasePrice ?? null,
     listingStatus: patch.listingStatus ?? "unknown",

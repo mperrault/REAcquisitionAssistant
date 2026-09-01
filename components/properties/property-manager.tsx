@@ -7,11 +7,15 @@ import {
   Activity,
   BadgeDollarSign,
   BarChart3,
+  Camera,
+  Clipboard,
   FileText,
   Home,
+  Images,
   LinkIcon,
   MapPin,
   Plus,
+  RefreshCw,
   RotateCcw,
   Save,
   Search,
@@ -31,6 +35,10 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { calculateDriveTimeResponseSchema } from "@/lib/commute/drive-time";
 import { listingCandidateEnrichmentResponseSchema } from "@/lib/listing-alerts/listing-enrichment";
+import {
+  type BrowserCaptureRecord,
+  browserCaptureListResponseSchema
+} from "@/lib/properties/browser-capture";
 import {
   PROPERTY_STORAGE_KEY,
   createEmptyPropertyState,
@@ -56,7 +64,9 @@ import {
   type PropertyEnrichmentDiagnostic,
   type PropertyFact,
   type PropertyFactSourceType,
+  type PropertyPhotoEvidence,
   type PropertyRecord,
+  type PropertySourceCapture,
   type PropertyState,
   lifecycleStatusOptions,
   listingStatusOptions,
@@ -77,6 +87,7 @@ import { cn } from "@/lib/utils";
 
 type TabId =
   | "overview"
+  | "sources"
   | "facts"
   | "financials"
   | "systems"
@@ -90,6 +101,7 @@ const tabs: Array<{
   icon: React.ComponentType<{ className?: string }>;
 }> = [
   { id: "overview", label: "Overview", icon: Home },
+  { id: "sources", label: "Sources", icon: Images },
   { id: "facts", label: "Facts", icon: Search },
   { id: "financials", label: "Financials", icon: BadgeDollarSign },
   { id: "systems", label: "Systems", icon: Wrench },
@@ -208,6 +220,147 @@ function createPropertyDiagnostic(
     status,
     message,
     detail
+  };
+}
+
+function createBrowserCaptureBookmarklet() {
+  const script = `(()=>{const compact=(value)=>String(value||"").replace(/\\s+/g," ").trim();const text=document.body?document.body.innerText:"";const addressMatch=text.match(/\\d{1,6}\\s+[A-Za-z0-9 .'-]+?(?:Road|Rd\\.?|Street|St\\.?|Avenue|Ave\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Court|Ct\\.?|Circle|Cir\\.?|Trail|Terrace|Ter\\.?|Way|Place|Pl\\.?|Boulevard|Blvd\\.?|Highway|Hwy\\.?),\\s*[A-Za-z .'-]+,\\s*[A-Z]{2}\\s+\\d{5}(?:-\\d{4})?/i);const sourceSite=location.hostname.replace(/^www\\./,"");const urls=[];const push=(url,img,index)=>{if(!url)return;const normalized=String(url).trim();const lower=normalized.toLowerCase();if(!/^https?:\\/\\//i.test(normalized))return;if(lower.includes("zillow_web")||lower.includes("z-logo")||lower.includes("staticmap")||lower.includes("app-store")||lower.includes("google-play")||lower.includes("footer-art")||lower.includes("/agents/")||lower.includes("agent"))return;if(sourceSite.includes("zillow")&&!lower.includes("photos.zillowstatic.com/fp/"))return;if(sourceSite.includes("zillow")&&!lower.includes("-cc_ft_")&&!/image of|photo of|road|rd|street|st|avenue|ave/i.test(img.alt||"")&&index>12)return;if(sourceSite.includes("realtor")&&!/rdcpix|realtor|move/i.test(lower))return;urls.push(normalized);};Array.from(document.images).forEach((img,index)=>{push(img.currentSrc||img.src,img,index);String(img.getAttribute("srcset")||"").split(",").map((part)=>part.trim().split(/\\s+/)[0]).forEach((url)=>push(url,img,index));});const photoUrls=Array.from(new Set(urls)).slice(0,40);const special=text.match(/What's special\\s+([\\s\\S]*?)(?:Show more|\\d+\\s+(?:minute|hour|day|month)s?\\s+on\\s+Zillow|Facts & features|Listed by:|Source:)/i);const payload={pageUrl:location.href,title:document.title,sourceSite,addressFull:addressMatch?compact(addressMatch[0]):"",listingRemarks:compact(special&&special[1]?special[1]:""),photoUrls};fetch("http://localhost:3000/api/browser-capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then((response)=>{if(!response.ok)throw new Error("HTTP "+response.status);alert("Sent "+photoUrls.length+" photo URLs to RE Assistant.");}).catch(()=>{prompt("Capture failed. Copy this payload into RE Assistant if needed:",JSON.stringify(payload));});})();`;
+
+  return `javascript:${encodeURIComponent(script)}`;
+}
+
+function formatCaptureDateTime(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function createPhotoEvidenceFromCapture(
+  capture: BrowserCaptureRecord,
+  url: string,
+  index: number
+): PropertyPhotoEvidence {
+  return {
+    id: `${capture.id}-photo-${index}`,
+    url,
+    sourceType: "browser_capture",
+    sourceSite: capture.sourceSite,
+    sourcePageUrl: capture.pageUrl,
+    label: capture.addressLine1
+      ? `${capture.addressLine1} photo ${index + 1}`
+      : `Captured photo ${index + 1}`,
+    capturedAt: capture.capturedAt
+  };
+}
+
+function createSourceCaptureSummary(
+  capture: BrowserCaptureRecord
+): PropertySourceCapture {
+  return {
+    id: capture.id,
+    capturedAt: capture.capturedAt,
+    sourceType: "browser_capture",
+    sourceSite: capture.sourceSite,
+    pageUrl: capture.pageUrl,
+    addressLine1: capture.addressLine1,
+    city: capture.city,
+    state: capture.state,
+    postalCode: capture.postalCode,
+    photoCount: capture.photoUrls.length,
+    remarksSnippet: capture.listingRemarks.slice(0, 500)
+  };
+}
+
+function captureMatchesProperty(
+  capture: BrowserCaptureRecord,
+  property: PropertyRecord
+) {
+  const captureAddress = [
+    capture.addressLine1,
+    capture.city,
+    capture.state,
+    capture.postalCode
+  ]
+    .join(" ")
+    .toLowerCase();
+  const propertyAddress = [
+    property.addressLine1,
+    property.city,
+    property.state,
+    property.postalCode
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (!captureAddress.trim() || !propertyAddress.trim()) {
+    return false;
+  }
+
+  return (
+    captureAddress.includes(property.addressLine1.toLowerCase()) ||
+    propertyAddress.includes(capture.addressLine1.toLowerCase())
+  );
+}
+
+function applyCaptureToProperty(
+  property: PropertyRecord,
+  capture: BrowserCaptureRecord
+) {
+  const capturedPhotoUrls = Array.from(new Set(capture.photoUrls));
+  const existingEvidenceUrls = new Set(
+    property.photoEvidence.map((photo) => photo.url)
+  );
+  const newEvidence = capturedPhotoUrls
+    .filter((url) => !existingEvidenceUrls.has(url))
+    .map((url, index) => createPhotoEvidenceFromCapture(capture, url, index));
+  const photoUrls = Array.from(
+    new Set([...property.photoUrls, ...capturedPhotoUrls])
+  );
+  const primaryPhotoUrl = property.primaryPhotoUrl || photoUrls[0] || "";
+  const diagnostics = [
+    ...property.enrichmentDiagnostics,
+    createPropertyDiagnostic(
+      "source capture",
+      capturedPhotoUrls.length > 0 ? "success" : "warning",
+      capturedPhotoUrls.length > 0
+        ? "Browser capture attached."
+        : "Browser capture had no usable photo URLs.",
+      `${capture.sourceSite || "Unknown source"} · ${capturedPhotoUrls.length} photo URL${
+        capturedPhotoUrls.length === 1 ? "" : "s"
+      }`
+    )
+  ].slice(-80);
+  const sourceCaptures = property.sourceCaptures.some(
+    (sourceCapture) => sourceCapture.id === capture.id
+  )
+    ? property.sourceCaptures.map((sourceCapture) =>
+        sourceCapture.id === capture.id
+          ? createSourceCaptureSummary(capture)
+          : sourceCapture
+      )
+    : [createSourceCaptureSummary(capture), ...property.sourceCaptures];
+
+  return {
+    ...property,
+    addressLine1: property.addressLine1 || capture.addressLine1,
+    city: property.city || capture.city,
+    state: property.state || capture.state || property.state,
+    postalCode: property.postalCode || capture.postalCode,
+    listingUrl: property.listingUrl || capture.pageUrl,
+    askingPrice: property.askingPrice ?? capture.askingPrice ?? null,
+    bedrooms: property.bedrooms ?? capture.bedrooms ?? null,
+    bathrooms: property.bathrooms ?? capture.bathrooms ?? null,
+    livingSqft: property.livingSqft ?? capture.livingSqft ?? null,
+    listingRemarks: property.listingRemarks || capture.listingRemarks,
+    primaryPhotoUrl,
+    photoUrls,
+    photoEvidence: [...newEvidence, ...property.photoEvidence],
+    sourceCaptures,
+    enrichmentDiagnostics: diagnostics,
+    updatedAt: capture.capturedAt
   };
 }
 
@@ -762,10 +915,64 @@ export function PropertyManager() {
   const [isEnrichingProperty, setIsEnrichingProperty] = React.useState(false);
   const [isCalculatingDriveTime, setIsCalculatingDriveTime] =
     React.useState(false);
+  const [browserCaptures, setBrowserCaptures] = React.useState<
+    BrowserCaptureRecord[]
+  >([]);
+  const [isLoadingCaptures, setIsLoadingCaptures] = React.useState(false);
+  const [captureStatus, setCaptureStatus] = React.useState("No captures loaded");
   const [loadSource, setLoadSource] = React.useState<"storage" | "empty" | "reset">(
     "empty"
   );
   const [saveStatus, setSaveStatus] = React.useState("Ready");
+
+  const loadBrowserCaptures = React.useCallback(
+    async (mode: "manual" | "silent" = "manual") => {
+      if (mode === "manual") {
+        setIsLoadingCaptures(true);
+        setCaptureStatus("Checking captures");
+      }
+
+      try {
+        const response = await fetch("/api/browser-capture", {
+          cache: "no-store"
+        });
+        const payload = await response.json();
+
+        if (!response.ok) {
+          const message =
+            payload && typeof payload.error === "string"
+              ? payload.error
+              : "Unable to load browser captures.";
+          throw new Error(message);
+        }
+
+        const parsed = browserCaptureListResponseSchema.parse(payload);
+
+        setBrowserCaptures(parsed.captures);
+
+        if (mode === "manual") {
+          setCaptureStatus(
+            parsed.captures.length > 0
+              ? `${parsed.captures.length} capture${
+                  parsed.captures.length === 1 ? "" : "s"
+                } available`
+              : "No browser captures found"
+          );
+        }
+      } catch (error) {
+        if (mode === "manual") {
+          setCaptureStatus(
+            error instanceof Error ? error.message : "Unable to load captures"
+          );
+        }
+      } finally {
+        if (mode === "manual") {
+          setIsLoadingCaptures(false);
+        }
+      }
+    },
+    []
+  );
 
   React.useEffect(() => {
     const result = loadPropertyState(window.localStorage);
@@ -806,6 +1013,15 @@ export function PropertyManager() {
       setSortMode(requestedSort);
     }
   }, [searchParams]);
+
+  React.useEffect(() => {
+    void loadBrowserCaptures("silent");
+    const intervalId = window.setInterval(() => {
+      void loadBrowserCaptures("silent");
+    }, 8000);
+
+    return () => window.clearInterval(intervalId);
+  }, [loadBrowserCaptures]);
 
   const selectedProperty = React.useMemo(
     () =>
@@ -933,6 +1149,43 @@ export function PropertyManager() {
     }
 
     persistState(upsertProperty(propertyState, draft), draft.id);
+  }
+
+  async function handleCopyBookmarklet() {
+    try {
+      await navigator.clipboard.writeText(createBrowserCaptureBookmarklet());
+      setCaptureStatus("Bookmarklet copied");
+    } catch {
+      setCaptureStatus("Copy failed");
+    }
+  }
+
+  function handleAttachCapture(captureId: string) {
+    if (!draft) {
+      return;
+    }
+
+    const capture = browserCaptures.find((item) => item.id === captureId);
+
+    if (!capture) {
+      setCaptureStatus("Capture not found");
+      return;
+    }
+
+    const capturedProperty = applyCaptureToProperty(draft, capture);
+    const nextPropertyState = upsertProperty(propertyState, capturedProperty);
+    const persistedState = savePropertyState(window.localStorage, nextPropertyState);
+
+    setPropertyState(persistedState);
+    setDraft(cloneProperty(capturedProperty));
+    setSelectedPropertyId(capturedProperty.id);
+    setLoadSource("storage");
+    setSaveStatus("Captured photos attached");
+    setCaptureStatus(
+      `Attached ${capture.photoUrls.length} photo URL${
+        capture.photoUrls.length === 1 ? "" : "s"
+      }`
+    );
   }
 
   function handleEvaluate() {
@@ -1543,6 +1796,17 @@ export function PropertyManager() {
                 {activeTab === "overview" ? (
                   <OverviewTab draft={draft} updateDraft={updateDraft} />
                 ) : null}
+                {activeTab === "sources" ? (
+                  <SourcesTab
+                    draft={draft}
+                    browserCaptures={browserCaptures}
+                    isLoadingCaptures={isLoadingCaptures}
+                    captureStatus={captureStatus}
+                    onRefreshCaptures={() => void loadBrowserCaptures("manual")}
+                    onCopyBookmarklet={() => void handleCopyBookmarklet()}
+                    onAttachCapture={handleAttachCapture}
+                  />
+                ) : null}
                 {activeTab === "facts" ? (
                   <FactsTab
                     draft={draft}
@@ -1868,6 +2132,248 @@ function OverviewTab({
             onChange={(longitude) => updateDraft({ longitude })}
           />
         </div>
+      </Section>
+    </div>
+  );
+}
+
+function SourcesTab({
+  draft,
+  browserCaptures,
+  isLoadingCaptures,
+  captureStatus,
+  onRefreshCaptures,
+  onCopyBookmarklet,
+  onAttachCapture
+}: {
+  draft: PropertyRecord;
+  browserCaptures: BrowserCaptureRecord[];
+  isLoadingCaptures: boolean;
+  captureStatus: string;
+  onRefreshCaptures: () => void;
+  onCopyBookmarklet: () => void;
+  onAttachCapture: (captureId: string) => void;
+}) {
+  const bookmarkletHref = React.useMemo(createBrowserCaptureBookmarklet, []);
+  const sortedCaptures = React.useMemo(
+    () =>
+      [...browserCaptures].sort((a, b) => {
+        const aMatches = captureMatchesProperty(a, draft) ? 1 : 0;
+        const bMatches = captureMatchesProperty(b, draft) ? 1 : 0;
+
+        return (
+          bMatches - aMatches ||
+          new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime()
+        );
+      }),
+    [browserCaptures, draft]
+  );
+
+  return (
+    <div className="grid gap-5">
+      <Section
+        title="Browser Capture"
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">{captureStatus}</Badge>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onCopyBookmarklet}
+            >
+              <Clipboard aria-hidden="true" />
+              Copy Link
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onRefreshCaptures}
+              disabled={isLoadingCaptures}
+            >
+              <RefreshCw
+                aria-hidden="true"
+                className={cn(isLoadingCaptures && "animate-spin")}
+              />
+              Refresh
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-4">
+          <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-card p-3">
+            <Button type="button" asChild>
+              <a href={bookmarkletHref}>
+                <Camera aria-hidden="true" />
+                Send to RE Assistant
+              </a>
+            </Button>
+            <div className="text-sm text-muted-foreground">
+              Drag once to bookmarks, then click it on a visible listing page.
+            </div>
+          </div>
+
+          {sortedCaptures.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+              No browser captures have been received by this dev server.
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              {sortedCaptures.map((capture) => {
+                const matches = captureMatchesProperty(capture, draft);
+
+                return (
+                  <div
+                    key={capture.id}
+                    className={cn(
+                      "rounded-md border bg-card p-3",
+                      matches ? "border-primary" : "border-border"
+                    )}
+                  >
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant={matches ? "success" : "outline"}>
+                            {matches ? "Address match" : "Review match"}
+                          </Badge>
+                          <Badge variant="outline">
+                            {capture.sourceSite || "Unknown source"}
+                          </Badge>
+                          <Badge variant="outline">
+                            {capture.photoUrls.length} photo
+                            {capture.photoUrls.length === 1 ? "" : "s"}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {formatCaptureDateTime(capture.capturedAt)}
+                          </span>
+                        </div>
+                        <div className="mt-2 truncate text-sm font-medium">
+                          {[
+                            capture.addressLine1,
+                            capture.city,
+                            capture.state,
+                            capture.postalCode
+                          ]
+                            .filter(Boolean)
+                            .join(", ") || capture.title}
+                        </div>
+                        <a
+                          href={capture.pageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1 block truncate text-xs text-primary hover:underline"
+                        >
+                          {capture.pageUrl}
+                        </a>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => onAttachCapture(capture.id)}
+                      >
+                        <Plus aria-hidden="true" />
+                        Attach
+                      </Button>
+                    </div>
+
+                    {capture.photoUrls.length > 0 ? (
+                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                        {capture.photoUrls.slice(0, 12).map((photoUrl) => (
+                          <div
+                            key={photoUrl}
+                            className="relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-secondary"
+                          >
+                            <Image
+                              src={photoUrl}
+                              alt="Captured listing photo"
+                              fill
+                              sizes="160px"
+                              className="object-cover"
+                              loading="lazy"
+                              unoptimized
+                              referrerPolicy="no-referrer"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Photo Evidence">
+        {draft.photoEvidence.length === 0 ? (
+          <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+            No captured photo evidence is attached to this property.
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+              {draft.photoEvidence.map((photo) => (
+                <div
+                  key={photo.id}
+                  className="overflow-hidden rounded-md border border-border bg-card"
+                >
+                  <div className="relative aspect-[4/3] bg-secondary">
+                    <Image
+                      src={photo.url}
+                      alt={photo.label}
+                      fill
+                      sizes="220px"
+                      className="object-cover"
+                      loading="lazy"
+                      unoptimized
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                  <div className="grid gap-1 p-2">
+                    <div className="truncate text-xs font-medium">
+                      {photo.label}
+                    </div>
+                    <div className="truncate text-[11px] text-muted-foreground">
+                      {photo.sourceSite || photo.sourceType}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {draft.sourceCaptures.length > 0 ? (
+              <div className="grid gap-2">
+                {draft.sourceCaptures.map((capture) => (
+                  <div
+                    key={capture.id}
+                    className="rounded-md border border-border bg-card p-3 text-sm"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">{capture.sourceSite}</Badge>
+                      <Badge variant="outline">
+                        {capture.photoCount} photo
+                        {capture.photoCount === 1 ? "" : "s"}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {formatCaptureDateTime(capture.capturedAt)}
+                      </span>
+                    </div>
+                    <a
+                      href={capture.pageUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-2 block truncate text-xs text-primary hover:underline"
+                    >
+                      {capture.pageUrl}
+                    </a>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        )}
       </Section>
     </div>
   );

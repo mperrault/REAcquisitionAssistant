@@ -54,6 +54,45 @@ export const propertyFactSchema = z.object({
 
 export type PropertyFact = z.infer<typeof propertyFactSchema>;
 
+export const propertyPhotoEvidenceSourceTypeSchema = z.enum([
+  "browser_capture",
+  "manual_url",
+  "email_alert",
+  "upload"
+]);
+
+export type PropertyPhotoEvidenceSourceType = z.infer<
+  typeof propertyPhotoEvidenceSourceTypeSchema
+>;
+
+export const propertyPhotoEvidenceSchema = z.object({
+  id: z.string().min(1),
+  url: z.string().min(1),
+  sourceType: propertyPhotoEvidenceSourceTypeSchema,
+  sourceSite: z.string(),
+  sourcePageUrl: z.string(),
+  label: z.string(),
+  capturedAt: z.string().datetime()
+});
+
+export type PropertyPhotoEvidence = z.infer<typeof propertyPhotoEvidenceSchema>;
+
+export const propertySourceCaptureSchema = z.object({
+  id: z.string().min(1),
+  capturedAt: z.string().datetime(),
+  sourceType: z.literal("browser_capture"),
+  sourceSite: z.string(),
+  pageUrl: z.string(),
+  addressLine1: z.string(),
+  city: z.string(),
+  state: z.string(),
+  postalCode: z.string(),
+  photoCount: z.number().int().nonnegative(),
+  remarksSnippet: z.string()
+});
+
+export type PropertySourceCapture = z.infer<typeof propertySourceCaptureSchema>;
+
 export const propertyEnrichmentDiagnosticSchema = z.object({
   id: z.string().min(1),
   at: z.string().datetime(),
@@ -82,6 +121,8 @@ export const propertyRecordSchema = z.object({
   mlsId: z.string(),
   primaryPhotoUrl: z.string().default(""),
   photoUrls: z.array(z.string()).default([]),
+  photoEvidence: z.array(propertyPhotoEvidenceSchema).default([]),
+  sourceCaptures: z.array(propertySourceCaptureSchema).default([]),
   askingPrice: nullableIntegerSchema,
   estimatedPurchasePrice: nullableIntegerSchema,
   listingStatus: listingStatusSchema,
