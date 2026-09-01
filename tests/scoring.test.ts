@@ -281,7 +281,7 @@ describe("property scoring", () => {
         "Asking price or estimated purchase price is missing.",
         "Setting and view facts are missing.",
         "House style is missing.",
-        "Renovation scope and expected cost are missing."
+        "Renovation scope is missing."
       ])
     );
   });

@@ -14,7 +14,32 @@ const requestCandidateSchema = z.object({
   photoUrls: z.array(z.string()),
   houseStyle: z.string().default(""),
   listingRemarks: z.string().default(""),
-  inferStyle: z.boolean().default(false)
+  inferStyle: z.boolean().default(false),
+  inferRenovation: z.boolean().default(false)
+});
+
+const renovationScopeFactSchema = z.object({
+  factKey: z.string().min(1),
+  label: z.string().min(1),
+  confidence: z.number().min(0).max(1).nullable(),
+  evidence: z.string()
+});
+
+const renovationLineItemSchema = z.object({
+  factKey: z.string().min(1),
+  label: z.string().min(1),
+  amount: z.number().int().nonnegative(),
+  confidence: z.number().min(0).max(1).nullable(),
+  evidence: z.string()
+});
+
+const enrichmentDiagnosticSchema = z.object({
+  id: z.string().min(1),
+  at: z.string().datetime(),
+  stage: z.string().min(1),
+  status: z.enum(["started", "success", "warning", "skipped", "failed", "info"]),
+  message: z.string().min(1),
+  detail: z.string()
 });
 
 export const listingCandidateEnrichmentRequestSchema = z.object({
@@ -33,9 +58,15 @@ export const listingCandidateEnrichmentResponseSchema = z.object({
     styleFactKey: z.string(),
     styleConfidence: z.number().min(0).max(1).nullable(),
     styleEvidence: z.string(),
-    styleSource: z.enum(["", "listing_text", "photo_inference"])
+    styleSource: z.enum(["", "listing_text", "photo_inference"]),
+    renovationScopeFacts: z.array(renovationScopeFactSchema),
+    renovationLineItems: z.array(renovationLineItemSchema),
+    renovationExpectedCost: z.number().int().nonnegative().nullable(),
+    renovationLowEstimate: z.number().int().nonnegative().nullable(),
+    renovationHighEstimate: z.number().int().nonnegative().nullable()
   }),
-  warnings: z.array(z.string())
+  warnings: z.array(z.string()),
+  diagnostics: z.array(enrichmentDiagnosticSchema).default([])
 });
 
 export type ListingCandidateEnrichmentResponse = z.infer<
@@ -60,6 +91,17 @@ type StyleInference = {
   evidence: string;
   source: "listing_text" | "photo_inference";
 };
+
+type RenovationInference = {
+  scopeFacts: Array<z.infer<typeof renovationScopeFactSchema>>;
+  lineItems: Array<z.infer<typeof renovationLineItemSchema>>;
+  expectedCost: number | null;
+  lowEstimate: number | null;
+  highEstimate: number | null;
+};
+
+type EnrichmentDiagnostic = z.infer<typeof enrichmentDiagnosticSchema>;
+type EnrichmentDiagnosticStatus = EnrichmentDiagnostic["status"];
 
 const styleDefinitions = [
   {
@@ -99,8 +141,78 @@ const styleDefinitions = [
   }
 ] as const;
 
+const renovationScopeDefinitions = [
+  { factKey: "renovation.paint", label: "Paint" },
+  { factKey: "renovation.flooring", label: "Flooring" },
+  { factKey: "renovation.kitchen", label: "Kitchen" },
+  { factKey: "renovation.bathrooms", label: "Bathrooms" },
+  { factKey: "renovation.lighting", label: "Lighting" },
+  { factKey: "renovation.landscaping", label: "Landscaping" },
+  { factKey: "renovation.windows", label: "Windows" },
+  { factKey: "renovation.siding", label: "Siding" },
+  { factKey: "renovation.deck_porch", label: "Deck / porch" },
+  { factKey: "renovation.minor_layout", label: "Minor layout changes" },
+  { factKey: "renovation.foundation_repair", label: "Foundation repair" },
+  {
+    factKey: "renovation.structural_rehabilitation",
+    label: "Structural rehabilitation"
+  },
+  { factKey: "renovation.whole_house_gut", label: "Whole-house gut renovation" },
+  { factKey: "renovation.major_addition", label: "Major addition" },
+  {
+    factKey: "renovation.extensive_systems_replacement",
+    label: "Extensive electrical/plumbing replacement"
+  }
+] as const;
+
 function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function createDiagnosticRecorder(fetchedAt: string) {
+  const diagnostics: EnrichmentDiagnostic[] = [];
+
+  return {
+    diagnostics,
+    add(
+      stage: string,
+      status: EnrichmentDiagnosticStatus,
+      message: string,
+      detail = ""
+    ) {
+      diagnostics.push({
+        id: `${diagnostics.length + 1}`,
+        at: fetchedAt,
+        stage,
+        status,
+        message,
+        detail
+      });
+    }
+  };
+}
+
+function summarizeRenovation(renovation: RenovationInference | null) {
+  if (!renovation) {
+    return "No renovation inference returned.";
+  }
+
+  const scopes = renovation.scopeFacts.map((fact) => fact.label).join(", ");
+  const lineItems = renovation.lineItems
+    .map((item) => `${item.label} ${item.amount}`)
+    .join(", ");
+
+  return [
+    scopes ? `Scopes: ${scopes}` : "Scopes: none",
+    lineItems ? `Line items: ${lineItems}` : "Line items: none",
+    renovation.expectedCost !== null
+      ? `Expected cost: ${renovation.expectedCost}`
+      : "Expected cost: none"
+  ].join(" | ");
+}
+
+function getEligibleVisionImageUrls(photoUrls: string[]) {
+  return Array.from(new Set(photoUrls.filter(isEligibleVisionImageUrl)));
 }
 
 function getStyleUpdate(style: StyleInference | null) {
@@ -113,12 +225,23 @@ function getStyleUpdate(style: StyleInference | null) {
   };
 }
 
+function getRenovationUpdate(renovation: RenovationInference | null) {
+  return {
+    renovationScopeFacts: renovation?.scopeFacts ?? [],
+    renovationLineItems: renovation?.lineItems ?? [],
+    renovationExpectedCost: renovation?.expectedCost ?? null,
+    renovationLowEstimate: renovation?.lowEstimate ?? null,
+    renovationHighEstimate: renovation?.highEstimate ?? null
+  };
+}
+
 function emptyUpdates() {
   return {
     askingPrice: null,
     primaryPhotoUrl: "",
     photoUrls: [],
-    ...getStyleUpdate(null)
+    ...getStyleUpdate(null),
+    ...getRenovationUpdate(null)
   };
 }
 
@@ -215,8 +338,15 @@ function getTextEvidence(text: string, pattern: RegExp) {
 
   const start = Math.max(0, match.index - 50);
   const end = Math.min(text.length, match.index + match[0].length + 50);
+  const snippetStart =
+    start === 0
+      ? start
+      : Math.min(
+          match.index,
+          text.indexOf(" ", start) === -1 ? start : text.indexOf(" ", start) + 1
+        );
 
-  return normalizeText(text.slice(start, end));
+  return normalizeText(text.slice(snippetStart, end));
 }
 
 function inferHouseStyleFromText(text: string): StyleInference | null {
@@ -335,13 +465,387 @@ function parseVisionStyleInference(text: string): StyleInference | null {
   }
 }
 
+function parseRenovationFactKey(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const raw = value.trim().toLowerCase();
+  const normalized = raw.replace(/[^a-z0-9]+/g, "_");
+
+  return (
+    renovationScopeDefinitions.find(
+      (definition) => definition.factKey === raw
+    ) ??
+    renovationScopeDefinitions.find(
+      (definition) =>
+        definition.factKey.replace("renovation.", "") === normalized ||
+        definition.label.toLowerCase().replace(/[^a-z0-9]+/g, "_") === normalized
+    ) ??
+    null
+  );
+}
+
+function parseConfidence(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : null;
+}
+
+function parseCost(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+
+  return Math.round(value);
+}
+
+function slugFromLabel(value: string) {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+  return slug || "misc";
+}
+
+function parseVisionRenovationInference(text: string): RenovationInference | null {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start === -1 || end === -1 || end <= start) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+    const rawScopeFacts = Array.isArray(parsed.scopeFacts)
+      ? parsed.scopeFacts
+      : [];
+    const scopeFacts = rawScopeFacts
+      .flatMap((item) => {
+        if (!item || typeof item !== "object") {
+          return [];
+        }
+
+        const record = item as Record<string, unknown>;
+        const definition = parseRenovationFactKey(record.factKey);
+        const confidence = parseConfidence(record.confidence);
+
+        if (!definition || confidence === null || confidence < 0.55) {
+          return [];
+        }
+
+        return [
+          {
+            factKey: definition.factKey,
+            label: definition.label,
+            confidence,
+            evidence:
+              typeof record.evidence === "string"
+                ? normalizeText(record.evidence).slice(0, 240)
+                : "Visible in listing photos"
+          }
+        ];
+      })
+      .filter(
+        (fact, index, facts) =>
+          facts.findIndex((item) => item.factKey === fact.factKey) === index
+      );
+    const rawLineItems = Array.isArray(parsed.lineItems) ? parsed.lineItems : [];
+    const lineItems = rawLineItems.flatMap((item) => {
+      if (!item || typeof item !== "object") {
+        return [];
+      }
+
+      const record = item as Record<string, unknown>;
+      const label =
+        typeof record.label === "string" ? normalizeText(record.label) : "";
+      const amount = parseCost(record.amount);
+      const confidence = parseConfidence(record.confidence);
+
+      if (!label || amount === null || confidence === null || confidence < 0.55) {
+        return [];
+      }
+
+      return [
+        {
+          factKey:
+            typeof record.factKey === "string" &&
+            record.factKey.startsWith("renovation.line_item.")
+              ? record.factKey
+              : `renovation.line_item.${slugFromLabel(label)}`,
+          label,
+          amount,
+          confidence,
+          evidence:
+            typeof record.evidence === "string"
+              ? normalizeText(record.evidence).slice(0, 240)
+              : "Visible in listing photos"
+        }
+      ];
+    });
+    const expectedCost =
+      parseCost(parsed.expectedCost) ??
+      (lineItems.length > 0
+        ? lineItems.reduce((total, item) => total + item.amount, 0)
+        : null);
+    const lowEstimate = parseCost(parsed.lowEstimate);
+    const highEstimate = parseCost(parsed.highEstimate);
+
+    if (scopeFacts.length === 0 && lineItems.length === 0 && expectedCost === null) {
+      return null;
+    }
+
+    return {
+      scopeFacts,
+      lineItems,
+      expectedCost,
+      lowEstimate,
+      highEstimate
+    };
+  } catch {
+    return null;
+  }
+}
+
+function createRenovationLineItem(
+  label: string,
+  amount: number,
+  confidence: number,
+  evidence: string
+) {
+  return {
+    factKey: `renovation.line_item.${slugFromLabel(label)}`,
+    label,
+    amount,
+    confidence,
+    evidence: normalizeText(evidence).slice(0, 240)
+  };
+}
+
+function inferRenovationFromText(text: string): RenovationInference | null {
+  const normalized = normalizeText(text);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const scopeFacts = new Map<string, z.infer<typeof renovationScopeFactSchema>>();
+  const lineItems = new Map<string, z.infer<typeof renovationLineItemSchema>>();
+
+  function addScope(
+    factKey: (typeof renovationScopeDefinitions)[number]["factKey"],
+    confidence: number,
+    evidence: string
+  ) {
+    const definition = renovationScopeDefinitions.find(
+      (item) => item.factKey === factKey
+    );
+
+    if (!definition) {
+      return;
+    }
+
+    const existing = scopeFacts.get(factKey);
+
+    if (existing && existing.confidence !== null && existing.confidence >= confidence) {
+      return;
+    }
+
+    scopeFacts.set(factKey, {
+      factKey,
+      label: definition.label,
+      confidence,
+      evidence: normalizeText(evidence).slice(0, 240)
+    });
+  }
+
+  function addLineItem(
+    label: string,
+    amount: number,
+    confidence: number,
+    evidence: string
+  ) {
+    const lineItem = createRenovationLineItem(label, amount, confidence, evidence);
+    lineItems.set(lineItem.factKey, lineItem);
+  }
+
+  const generalTlcPattern =
+    /\b(?:tlc|fixer(?:[-\s]?upper)?|needs?\s+(?:work|updat(?:e|ing)|renovation)|make it your own|dated|original|cosmetic(?:ally)?|as[-\s]?is)\b/i;
+  const generalEvidence = getTextEvidence(normalized, generalTlcPattern);
+
+  if (generalEvidence) {
+    addScope("renovation.paint", 0.62, generalEvidence);
+    addScope("renovation.flooring", 0.58, generalEvidence);
+    addLineItem("General cosmetic refresh", 20000, 0.6, generalEvidence);
+  }
+
+  const kitchenEvidence = getTextEvidence(
+    normalized,
+    /\bkitchen\b.{0,60}\b(?:dated|original|needs?\s+(?:work|updat(?:e|ing)|renovation)|old)\b|\b(?:dated|original|old)\b.{0,60}\bkitchen\b/i
+  );
+
+  if (kitchenEvidence) {
+    addScope("renovation.kitchen", 0.72, kitchenEvidence);
+    addLineItem("Kitchen refresh", 18000, 0.68, kitchenEvidence);
+  }
+
+  const bathEvidence = getTextEvidence(
+    normalized,
+    /\bbath(?:room)?s?\b.{0,60}\b(?:dated|original|needs?\s+(?:work|updat(?:e|ing)|renovation)|old)\b|\b(?:dated|original|old)\b.{0,60}\bbath(?:room)?s?\b/i
+  );
+
+  if (bathEvidence) {
+    addScope("renovation.bathrooms", 0.7, bathEvidence);
+    addLineItem("Bathroom refresh", 12000, 0.66, bathEvidence);
+  }
+
+  const flooringEvidence = getTextEvidence(
+    normalized,
+    /\b(?:flooring|floors?|carpet)\b.{0,60}\b(?:dated|worn|needs?\s+(?:work|replacement|refinish(?:ing)?|updat(?:e|ing)))\b|\b(?:worn|dated)\b.{0,60}\b(?:flooring|floors?|carpet)\b/i
+  );
+
+  if (flooringEvidence) {
+    addScope("renovation.flooring", 0.72, flooringEvidence);
+    addLineItem("Flooring refresh", 9000, 0.68, flooringEvidence);
+  }
+
+  const paintEvidence = getTextEvidence(
+    normalized,
+    /\bpaint(?:ing)?\b.{0,60}\b(?:needed|needs?|freshen|refresh|update)\b|\b(?:freshen|refresh|update)\b.{0,60}\bpaint(?:ing)?\b/i
+  );
+
+  if (paintEvidence) {
+    addScope("renovation.paint", 0.72, paintEvidence);
+    addLineItem("Interior paint", 6000, 0.68, paintEvidence);
+  }
+
+  const lightingEvidence = getTextEvidence(
+    normalized,
+    /\b(?:lighting|fixtures?)\b.{0,60}\b(?:dated|old|needs?\s+(?:work|replacement|updat(?:e|ing)))\b|\b(?:dated|old)\b.{0,60}\b(?:lighting|fixtures?)\b/i
+  );
+
+  if (lightingEvidence) {
+    addScope("renovation.lighting", 0.68, lightingEvidence);
+    addLineItem("Lighting and fixture updates", 3500, 0.64, lightingEvidence);
+  }
+
+  const landscapingEvidence = getTextEvidence(
+    normalized,
+    /\b(?:landscaping|yard|grounds?)\b.{0,60}\b(?:overgrown|needs?\s+(?:work|cleanup|refresh))\b|\bovergrown\b.{0,60}\b(?:landscaping|yard|grounds?)\b/i
+  );
+
+  if (landscapingEvidence) {
+    addScope("renovation.landscaping", 0.68, landscapingEvidence);
+    addLineItem("Landscaping cleanup", 6000, 0.64, landscapingEvidence);
+  }
+
+  const windowEvidence = getTextEvidence(
+    normalized,
+    /\bwindows?\b.{0,60}\b(?:old|original|needs?\s+(?:work|replacement|updat(?:e|ing)))\b|\b(?:old|original)\b.{0,60}\bwindows?\b/i
+  );
+
+  if (windowEvidence) {
+    addScope("renovation.windows", 0.7, windowEvidence);
+    addLineItem("Window updates", 12000, 0.64, windowEvidence);
+  }
+
+  const sidingEvidence = getTextEvidence(
+    normalized,
+    /\bsiding\b.{0,60}\b(?:old|damaged|needs?\s+(?:work|replacement|repair))\b|\b(?:old|damaged)\b.{0,60}\bsiding\b/i
+  );
+
+  if (sidingEvidence) {
+    addScope("renovation.siding", 0.7, sidingEvidence);
+    addLineItem("Siding repair", 14000, 0.64, sidingEvidence);
+  }
+
+  const deckEvidence = getTextEvidence(
+    normalized,
+    /\b(?:deck|porch)\b.{0,60}\b(?:old|damaged|needs?\s+(?:work|replacement|repair))\b|\b(?:old|damaged)\b.{0,60}\b(?:deck|porch)\b/i
+  );
+
+  if (deckEvidence) {
+    addScope("renovation.deck_porch", 0.7, deckEvidence);
+    addLineItem("Deck or porch repair", 8000, 0.64, deckEvidence);
+  }
+
+  const majorEvidence = getTextEvidence(
+    normalized,
+    /\b(?:gut renovation|full gut|major renovation|needs everything|total rehab)\b/i
+  );
+
+  if (majorEvidence) {
+    addScope("renovation.whole_house_gut", 0.76, majorEvidence);
+    addLineItem("Whole-house renovation allowance", 90000, 0.68, majorEvidence);
+  }
+
+  const structuralEvidence = getTextEvidence(
+    normalized,
+    /\b(?:structural|foundation)\b.{0,60}\b(?:repair|issue|problem|work|damage)\b/i
+  );
+
+  if (structuralEvidence) {
+    addScope("renovation.structural_rehabilitation", 0.72, structuralEvidence);
+    addLineItem("Structural repair allowance", 50000, 0.62, structuralEvidence);
+  }
+
+  if (scopeFacts.size === 0 && lineItems.size === 0) {
+    return null;
+  }
+
+  const expectedCost = Array.from(lineItems.values()).reduce(
+    (total, item) => total + item.amount,
+    0
+  );
+
+  return {
+    scopeFacts: Array.from(scopeFacts.values()),
+    lineItems: Array.from(lineItems.values()),
+    expectedCost,
+    lowEstimate: Math.round(expectedCost * 0.6),
+    highEstimate: Math.round(expectedCost * 1.6)
+  };
+}
+
+function mergeRenovationInferences(
+  primary: RenovationInference | null,
+  fallback: RenovationInference | null
+): RenovationInference | null {
+  if (!primary) {
+    return fallback;
+  }
+
+  if (!fallback) {
+    return primary;
+  }
+
+  const scopeFacts = [...primary.scopeFacts];
+
+  for (const fact of fallback.scopeFacts) {
+    if (!scopeFacts.some((item) => item.factKey === fact.factKey)) {
+      scopeFacts.push(fact);
+    }
+  }
+
+  return {
+    scopeFacts,
+    lineItems:
+      primary.lineItems.length > 0 ? primary.lineItems : fallback.lineItems,
+    expectedCost: primary.expectedCost ?? fallback.expectedCost,
+    lowEstimate: primary.lowEstimate ?? fallback.lowEstimate,
+    highEstimate: primary.highEstimate ?? fallback.highEstimate
+  };
+}
+
 async function inferHouseStyleFromPhotos(
   photoUrls: string[],
   fetcher: FetchLike
 ): Promise<{ style: StyleInference | null; warning: string | null }> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  const imageUrls = Array.from(new Set(photoUrls.filter(isEligibleVisionImageUrl)))
-    .slice(0, 3);
+  const imageUrls = getEligibleVisionImageUrls(photoUrls).slice(0, 3);
 
   if (imageUrls.length === 0) {
     return {
@@ -400,6 +904,100 @@ async function inferHouseStyleFromPhotos(
     style,
     warning: style ? null : "photo inference ran but confidence was below threshold"
   };
+}
+
+async function inferRenovationsFromPhotos(
+  photoUrls: string[],
+  fetcher: FetchLike
+): Promise<{ renovation: RenovationInference | null; warning: string | null }> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const imageUrls = getEligibleVisionImageUrls(photoUrls).slice(0, 8);
+
+  if (imageUrls.length === 0) {
+    return {
+      renovation: null,
+      warning: "renovation inference skipped because no eligible listing photo URL was available"
+    };
+  }
+
+  if (!apiKey) {
+    return {
+      renovation: null,
+      warning: "renovation inference skipped because OPENAI_API_KEY is not configured"
+    };
+  }
+
+  const allowedScopes = renovationScopeDefinitions
+    .map((definition) => `${definition.factKey} (${definition.label})`)
+    .join(", ");
+  const response = await fetcher("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: process.env.OPENAI_VISION_MODEL?.trim() || "gpt-5-mini",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "Infer visible renovation needs from these real-estate listing photos only. " +
+                "Do not infer hidden defects, code issues, electrical, plumbing, structural, roof, or foundation work unless directly visible. " +
+                `Use only these scope fact keys: ${allowedScopes}. ` +
+                "Return conservative ballpark USD costs for visible cosmetic and functional work. " +
+                "Return only JSON with keys scopeFacts, lineItems, expectedCost, lowEstimate, highEstimate. " +
+                "scopeFacts must contain objects with factKey, confidence, evidence. " +
+                "lineItems must contain objects with label, amount, confidence, evidence."
+            },
+            ...imageUrls.map((imageUrl) => ({
+              type: "input_image",
+              image_url: imageUrl,
+              detail: "low"
+            }))
+          ]
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    return {
+      renovation: null,
+      warning: `renovation photo inference failed with HTTP ${response.status}`
+    };
+  }
+
+  const renovation = parseVisionRenovationInference(
+    extractResponseOutputText(await response.json())
+  );
+
+  return {
+    renovation,
+    warning: renovation
+      ? null
+      : "renovation photo inference ran but did not return confident scope"
+  };
+}
+
+async function inferRenovationsSafelyFromPhotos(
+  photoUrls: string[],
+  fetcher: FetchLike
+) {
+  try {
+    return await inferRenovationsFromPhotos(photoUrls, fetcher);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "photo inference failed";
+
+    return {
+      renovation: null,
+      warning: `renovation photo inference failed: ${message}`
+    };
+  }
 }
 
 function collectImageUrls(value: unknown, urls: string[]) {
@@ -602,7 +1200,7 @@ export async function enrichListingCandidate(
     Partial<
       Pick<
         z.infer<typeof requestCandidateSchema>,
-        "houseStyle" | "listingRemarks" | "inferStyle"
+        "houseStyle" | "listingRemarks" | "inferStyle" | "inferRenovation"
       >
     >,
   fetcher: FetchLike = fetch
@@ -610,11 +1208,66 @@ export async function enrichListingCandidate(
   const parsedCandidate = requestCandidateSchema.parse(candidate);
   const listingUrl = validateFetchUrl(parsedCandidate.listingUrl);
   const fetchedAt = new Date().toISOString();
+  const diagnosticRecorder = createDiagnosticRecorder(fetchedAt);
+  const { diagnostics } = diagnosticRecorder;
+  const addDiagnostic = diagnosticRecorder.add;
   const warnings: string[] = [];
+  const shouldFillStyleFromRequest =
+    parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim();
+  const shouldInferRenovation = parsedCandidate.inferRenovation;
+  const requestTextStyle = shouldFillStyleFromRequest
+    ? inferHouseStyleFromText(parsedCandidate.listingRemarks)
+    : null;
+  const requestTextRenovation = shouldInferRenovation
+    ? inferRenovationFromText(parsedCandidate.listingRemarks)
+    : null;
+  const requestPhotoUrls = Array.from(
+    new Set([
+      ...(parsedCandidate.primaryPhotoUrl ? [parsedCandidate.primaryPhotoUrl] : []),
+      ...parsedCandidate.photoUrls
+    ])
+  );
+  addDiagnostic(
+    "start",
+    "started",
+    "Started listing enrichment.",
+    [
+      `Listing URL: ${listingUrl}`,
+      `Saved photos: ${requestPhotoUrls.length}`,
+      `Listing remarks: ${parsedCandidate.listingRemarks.trim() ? "present" : "missing"}`,
+      `Style inference: ${parsedCandidate.inferStyle ? "enabled" : "disabled"}`,
+      `Renovation inference: ${shouldInferRenovation ? "enabled" : "disabled"}`
+    ].join(" ")
+  );
+
+  if (requestTextRenovation) {
+    addDiagnostic(
+      "renovation text",
+      "success",
+      "Listing remarks matched renovation signals.",
+      summarizeRenovation(requestTextRenovation)
+    );
+  } else if (shouldInferRenovation) {
+    addDiagnostic(
+      "renovation text",
+      "skipped",
+      "Listing remarks did not identify renovation scope.",
+      parsedCandidate.listingRemarks.trim()
+        ? "No supported renovation phrases were matched."
+        : "No listing remarks were available."
+    );
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
 
   try {
+    addDiagnostic(
+      "listing fetch",
+      "started",
+      "Fetching listing page.",
+      listingUrl
+    );
     const response = await fetcher(listingUrl, {
       signal: controller.signal,
       headers: {
@@ -627,35 +1280,167 @@ export async function enrichListingCandidate(
 
     if (!response.ok) {
       warnings.push(`Listing page fetch failed with HTTP ${response.status}.`);
-      if (parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim()) {
+      addDiagnostic(
+        "listing fetch",
+        "warning",
+        `Listing page fetch failed with HTTP ${response.status}.`,
+        "The app will use saved candidate photos and listing remarks when available."
+      );
+      if (shouldFillStyleFromRequest && !requestTextStyle) {
         warnings.push(
           `House style inference failed: listing page fetch failed with HTTP ${response.status}.`
         );
+        addDiagnostic(
+          "style",
+          "warning",
+          "House style was not inferred.",
+          `Listing page fetch failed with HTTP ${response.status}.`
+        );
       }
+      const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
+      if (shouldInferRenovation) {
+        addDiagnostic(
+          "renovation photos",
+          eligiblePhotoCount > 0 ? "started" : "skipped",
+          eligiblePhotoCount > 0
+            ? "Running photo renovation inference from saved candidate photos."
+            : "Photo renovation inference has no eligible saved photo URLs.",
+          `Eligible photos: ${eligiblePhotoCount}`
+        );
+      }
+      const photoRenovation = shouldInferRenovation
+        ? await inferRenovationsSafelyFromPhotos(requestPhotoUrls, fetcher)
+        : null;
+      const renovation = mergeRenovationInferences(
+        photoRenovation?.renovation ?? null,
+        requestTextRenovation
+      );
+
+      if (photoRenovation?.warning) {
+        warnings.push(photoRenovation.warning);
+        addDiagnostic(
+          "renovation photos",
+          "warning",
+          photoRenovation.warning,
+          "Photo renovation inference did not provide usable output."
+        );
+      }
+
+      if (renovation) {
+        addDiagnostic(
+          "renovation",
+          "success",
+          "Renovation inference produced facts.",
+          summarizeRenovation(renovation)
+        );
+      } else if (shouldInferRenovation) {
+        addDiagnostic(
+          "renovation",
+          "warning",
+          "Renovation inference did not produce facts.",
+          "No photo or text inference result was available."
+        );
+      }
+
       return listingCandidateEnrichmentResponseSchema.parse({
         candidateId: parsedCandidate.id,
         listingUrl,
         fetchedAt,
-        updates: emptyUpdates(),
-        warnings
+        updates: {
+          ...emptyUpdates(),
+          ...getStyleUpdate(requestTextStyle),
+          ...getRenovationUpdate(renovation)
+        },
+        warnings,
+        diagnostics
       });
     }
 
     const metadata = extractMetadata(await response.text());
+    addDiagnostic(
+      "listing fetch",
+      "success",
+      "Listing page fetched.",
+      `Photos found: ${metadata.photoUrls.length}. Asking price found: ${
+        metadata.askingPrice !== null ? metadata.askingPrice : "none"
+      }.`
+    );
 
     if (!pageMatchesCandidate(parsedCandidate, metadata)) {
       warnings.push("Fetched listing page did not include candidate address.");
-      if (parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim()) {
+      addDiagnostic(
+        "listing fetch",
+        "warning",
+        "Fetched listing page did not include candidate address.",
+        "The app will avoid applying page-derived price or photo data."
+      );
+      if (shouldFillStyleFromRequest && !requestTextStyle) {
         warnings.push(
           "House style inference failed: fetched listing page did not include the property address."
         );
+        addDiagnostic(
+          "style",
+          "warning",
+          "House style was not inferred.",
+          "Fetched listing page did not include the property address."
+        );
       }
+      const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
+      if (shouldInferRenovation) {
+        addDiagnostic(
+          "renovation photos",
+          eligiblePhotoCount > 0 ? "started" : "skipped",
+          eligiblePhotoCount > 0
+            ? "Running photo renovation inference from saved candidate photos."
+            : "Photo renovation inference has no eligible saved photo URLs.",
+          `Eligible photos: ${eligiblePhotoCount}`
+        );
+      }
+      const photoRenovation = shouldInferRenovation
+        ? await inferRenovationsSafelyFromPhotos(requestPhotoUrls, fetcher)
+        : null;
+      const renovation = mergeRenovationInferences(
+        photoRenovation?.renovation ?? null,
+        requestTextRenovation
+      );
+
+      if (photoRenovation?.warning) {
+        warnings.push(photoRenovation.warning);
+        addDiagnostic(
+          "renovation photos",
+          "warning",
+          photoRenovation.warning,
+          "Photo renovation inference did not provide usable output."
+        );
+      }
+
+      if (renovation) {
+        addDiagnostic(
+          "renovation",
+          "success",
+          "Renovation inference produced facts.",
+          summarizeRenovation(renovation)
+        );
+      } else if (shouldInferRenovation) {
+        addDiagnostic(
+          "renovation",
+          "warning",
+          "Renovation inference did not produce facts.",
+          "No photo or text inference result was available."
+        );
+      }
+
       return listingCandidateEnrichmentResponseSchema.parse({
         candidateId: parsedCandidate.id,
         listingUrl,
         fetchedAt,
-        updates: emptyUpdates(),
-        warnings
+        updates: {
+          ...emptyUpdates(),
+          ...getStyleUpdate(requestTextStyle),
+          ...getRenovationUpdate(renovation)
+        },
+        warnings,
+        diagnostics
       });
     }
 
@@ -672,9 +1457,41 @@ export async function enrichListingCandidate(
         ...parsedCandidate.photoUrls
       ])
     );
+    const eligiblePhotoCount = getEligibleVisionImageUrls(availablePhotoUrls).length;
+    if (shouldInferRenovation) {
+      addDiagnostic(
+        "renovation photos",
+        eligiblePhotoCount > 0 ? "started" : "skipped",
+        eligiblePhotoCount > 0
+          ? "Running photo renovation inference."
+          : "Photo renovation inference has no eligible photo URLs.",
+        `Eligible photos: ${eligiblePhotoCount}. Total candidate/page photos: ${availablePhotoUrls.length}.`
+      );
+    }
+    const photoRenovation = shouldInferRenovation
+      ? await inferRenovationsSafelyFromPhotos(availablePhotoUrls, fetcher)
+      : null;
+    const textRenovation = shouldInferRenovation
+      ? inferRenovationFromText(
+          `${metadata.pageText} ${parsedCandidate.listingRemarks}`
+        )
+      : null;
+    const renovation = mergeRenovationInferences(
+      photoRenovation?.renovation ?? null,
+      textRenovation
+    );
+    if (textRenovation) {
+      addDiagnostic(
+        "renovation text",
+        "success",
+        "Listing page text matched renovation signals.",
+        summarizeRenovation(textRenovation)
+      );
+    }
     let style =
       shouldFillStyle
-        ? inferHouseStyleFromText(
+        ? requestTextStyle ??
+          inferHouseStyleFromText(
             `${metadata.pageText} ${parsedCandidate.listingRemarks}`
           )
         : null;
@@ -698,36 +1515,112 @@ export async function enrichListingCandidate(
       askingPrice: shouldFillPrice ? metadata.askingPrice : null,
       primaryPhotoUrl: shouldFillPhoto ? (metadata.photoUrls[0] ?? "") : "",
       photoUrls: shouldFillPhoto ? metadata.photoUrls : [],
-      ...getStyleUpdate(style)
+      ...getStyleUpdate(style),
+      ...getRenovationUpdate(renovation)
     };
 
     if (shouldFillPrice && updates.askingPrice === null) {
       warnings.push("Listing page did not expose an asking price.");
+      addDiagnostic(
+        "price",
+        "warning",
+        "Listing page did not expose an asking price.",
+        "Existing property price was empty and no page price was found."
+      );
+    } else if (shouldFillPrice && updates.askingPrice !== null) {
+      addDiagnostic(
+        "price",
+        "success",
+        "Asking price was found.",
+        `${updates.askingPrice}`
+      );
+    } else {
+      addDiagnostic(
+        "price",
+        "skipped",
+        "Asking price was already populated.",
+        "No price update needed."
+      );
     }
 
     if (shouldFillPhoto && !updates.primaryPhotoUrl) {
       warnings.push("Listing page did not expose a property photo.");
+      addDiagnostic(
+        "photo",
+        "warning",
+        "Listing page did not expose a property photo.",
+        "Existing primary photo was empty and no page photo was found."
+      );
+    } else if (shouldFillPhoto && updates.primaryPhotoUrl) {
+      addDiagnostic(
+        "photo",
+        "success",
+        "Primary photo was found.",
+        `Photos found: ${updates.photoUrls.length}`
+      );
+    } else {
+      addDiagnostic(
+        "photo",
+        "skipped",
+        "Primary photo was already populated.",
+        "No photo update needed."
+      );
     }
 
     if (shouldFillStyle && !style) {
       warnings.push(`House style inference failed: ${styleFailureReason}.`);
+      addDiagnostic(
+        "style",
+        "warning",
+        "House style inference failed.",
+        styleFailureReason
+      );
+    } else if (shouldFillStyle && style) {
+      addDiagnostic(
+        "style",
+        "success",
+        "House style was inferred.",
+        `${style.houseStyle} from ${style.source}; confidence ${style.confidence}`
+      );
+    } else {
+      addDiagnostic(
+        "style",
+        "skipped",
+        "House style inference was not needed.",
+        "House style is already populated or inference was disabled."
+      );
     }
 
-    return listingCandidateEnrichmentResponseSchema.parse({
-      candidateId: parsedCandidate.id,
-      listingUrl,
-      fetchedAt,
-      updates,
-      warnings
-    });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Listing page fetch failed.";
-    warnings.push(`Listing page fetch failed: ${message}`);
+    if (photoRenovation?.warning) {
+      warnings.push(photoRenovation.warning);
+      addDiagnostic(
+        "renovation photos",
+        "warning",
+        photoRenovation.warning,
+        "Photo renovation inference did not provide usable output."
+      );
+    } else if (photoRenovation?.renovation) {
+      addDiagnostic(
+        "renovation photos",
+        "success",
+        "Photo renovation inference produced facts.",
+        summarizeRenovation(photoRenovation.renovation)
+      );
+    }
 
-    if (parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim()) {
-      warnings.push(
-        `House style inference failed: listing page fetch failed: ${message}`
+    if (renovation) {
+      addDiagnostic(
+        "renovation",
+        "success",
+        "Renovation inference produced facts.",
+        summarizeRenovation(renovation)
+      );
+    } else if (shouldInferRenovation) {
+      addDiagnostic(
+        "renovation",
+        "warning",
+        "Renovation inference did not produce facts.",
+        "No photo or text inference result was available."
       );
     }
 
@@ -735,8 +1628,88 @@ export async function enrichListingCandidate(
       candidateId: parsedCandidate.id,
       listingUrl,
       fetchedAt,
-      updates: emptyUpdates(),
-      warnings
+      updates,
+      warnings,
+      diagnostics
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Listing page fetch failed.";
+    warnings.push(`Listing page fetch failed: ${message}`);
+    addDiagnostic(
+      "listing fetch",
+      "failed",
+      `Listing page fetch failed: ${message}`,
+      "The app will use saved candidate photos and listing remarks when available."
+    );
+
+    if (shouldFillStyleFromRequest && !requestTextStyle) {
+      warnings.push(
+        `House style inference failed: listing page fetch failed: ${message}`
+      );
+      addDiagnostic(
+        "style",
+        "warning",
+        "House style was not inferred.",
+        `Listing page fetch failed: ${message}`
+      );
+    }
+    const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
+    if (shouldInferRenovation) {
+      addDiagnostic(
+        "renovation photos",
+        eligiblePhotoCount > 0 ? "started" : "skipped",
+        eligiblePhotoCount > 0
+          ? "Running photo renovation inference from saved candidate photos."
+          : "Photo renovation inference has no eligible saved photo URLs.",
+        `Eligible photos: ${eligiblePhotoCount}`
+      );
+    }
+    const photoRenovation = shouldInferRenovation
+      ? await inferRenovationsSafelyFromPhotos(requestPhotoUrls, fetcher)
+      : null;
+    const renovation = mergeRenovationInferences(
+      photoRenovation?.renovation ?? null,
+      requestTextRenovation
+    );
+
+    if (photoRenovation?.warning) {
+      warnings.push(photoRenovation.warning);
+      addDiagnostic(
+        "renovation photos",
+        "warning",
+        photoRenovation.warning,
+        "Photo renovation inference did not provide usable output."
+      );
+    }
+
+    if (renovation) {
+      addDiagnostic(
+        "renovation",
+        "success",
+        "Renovation inference produced facts.",
+        summarizeRenovation(renovation)
+      );
+    } else if (shouldInferRenovation) {
+      addDiagnostic(
+        "renovation",
+        "warning",
+        "Renovation inference did not produce facts.",
+        "No photo or text inference result was available."
+      );
+    }
+
+    return listingCandidateEnrichmentResponseSchema.parse({
+      candidateId: parsedCandidate.id,
+      listingUrl,
+      fetchedAt,
+      updates: {
+        ...emptyUpdates(),
+        ...getStyleUpdate(requestTextStyle),
+          ...getRenovationUpdate(renovation)
+      },
+      warnings,
+      diagnostics
     });
   } finally {
     clearTimeout(timeout);

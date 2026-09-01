@@ -501,7 +501,7 @@ function evaluateFeaturePreferences(
   );
 
   if (hasRenovationPreferences && !hasRenovationFacts) {
-    missingData.push("Renovation scope and expected cost are missing.");
+    missingData.push("Renovation scope is missing.");
   }
 }
 

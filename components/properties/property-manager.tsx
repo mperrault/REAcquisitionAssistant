@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import * as React from "react";
 import {
+  Activity,
   BadgeDollarSign,
   BarChart3,
   FileText,
@@ -52,6 +53,7 @@ import {
 import {
   type LifecycleStatus,
   type ListingStatus,
+  type PropertyEnrichmentDiagnostic,
   type PropertyFact,
   type PropertyFactSourceType,
   type PropertyRecord,
@@ -79,6 +81,7 @@ type TabId =
   | "financials"
   | "systems"
   | "notes"
+  | "diagnostics"
   | "scoring";
 
 const tabs: Array<{
@@ -91,6 +94,7 @@ const tabs: Array<{
   { id: "financials", label: "Financials", icon: BadgeDollarSign },
   { id: "systems", label: "Systems", icon: Wrench },
   { id: "notes", label: "Notes", icon: FileText },
+  { id: "diagnostics", label: "Diagnostics", icon: Activity },
   { id: "scoring", label: "Scoring", icon: BarChart3 }
 ];
 
@@ -190,6 +194,23 @@ function formatEvaluationDateTime(value: string) {
   }).format(new Date(value));
 }
 
+function createPropertyDiagnostic(
+  stage: string,
+  status: PropertyEnrichmentDiagnostic["status"],
+  message: string,
+  detail = "",
+  at = new Date().toISOString()
+): PropertyEnrichmentDiagnostic {
+  return {
+    id: `client-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    at,
+    stage,
+    status,
+    message,
+    detail
+  };
+}
+
 function getScoreBadgeVariant(
   evaluation: ScoreEvaluation
 ): React.ComponentProps<typeof Badge>["variant"] {
@@ -225,7 +246,8 @@ function createPropertyEnrichmentCandidate(property: PropertyRecord) {
     photoUrls: property.photoUrls,
     houseStyle: property.houseStyle,
     listingRemarks: property.listingRemarks,
-    inferStyle: true
+    inferStyle: true,
+    inferRenovation: true
   };
 }
 
@@ -307,6 +329,54 @@ function upsertSourcedTextFact(
   return [...facts, nextFact];
 }
 
+function upsertInferredPropertyFact(
+  facts: PropertyFact[],
+  factKey: string,
+  label: string,
+  value: PropertyFact["value"],
+  confidence: number | null,
+  sourceReference: string,
+  observedAt: string
+) {
+  if (!factKey) {
+    return facts;
+  }
+
+  const existingFact = facts.find((fact) => fact.factKey === factKey);
+
+  if (
+    existingFact &&
+    (existingFact.sourceType === "user_entered" ||
+      existingFact.sourceType === "verified")
+  ) {
+    return facts;
+  }
+
+  const nextFact = {
+    ...(existingFact ??
+      createPropertyFact({
+        factKey,
+        label,
+        value,
+        sourceType: "ai_inferred",
+        sourceReference
+      })),
+    label,
+    value,
+    sourceType: "ai_inferred" as const,
+    sourceReference,
+    confidence,
+    verified: false,
+    observedAt
+  };
+
+  if (existingFact) {
+    return facts.map((fact) => (fact.id === existingFact.id ? nextFact : fact));
+  }
+
+  return [...facts, nextFact];
+}
+
 function mergeEnrichmentIntoProperty(
   property: PropertyRecord,
   enrichment: ReturnType<typeof listingCandidateEnrichmentResponseSchema.parse>
@@ -357,7 +427,95 @@ function mergeEnrichmentIntoProperty(
           enrichment.fetchedAt
         )
       : property.facts;
-  const changed = shouldApplyPrice || shouldApplyPhoto || shouldApplyStyle;
+  const photoInferenceReference = "Photo renovation inference";
+  let renovationFacts = facts;
+  let appliedRenovationScopes = 0;
+  let appliedRenovationLineItems = 0;
+  let appliedRenovationEstimates = 0;
+
+  for (const scopeFact of enrichment.updates.renovationScopeFacts) {
+    const beforeFacts = renovationFacts;
+    renovationFacts = upsertInferredPropertyFact(
+      renovationFacts,
+      scopeFact.factKey,
+      scopeFact.label,
+      true,
+      scopeFact.confidence,
+      scopeFact.evidence
+        ? `${photoInferenceReference}: ${scopeFact.evidence}`
+        : photoInferenceReference,
+      enrichment.fetchedAt
+    );
+
+    if (renovationFacts !== beforeFacts) {
+      appliedRenovationScopes += 1;
+    }
+  }
+
+  for (const lineItem of enrichment.updates.renovationLineItems) {
+    const beforeFacts = renovationFacts;
+    renovationFacts = upsertInferredPropertyFact(
+      renovationFacts,
+      lineItem.factKey,
+      lineItem.label,
+      lineItem.amount,
+      lineItem.confidence,
+      lineItem.evidence
+        ? `${photoInferenceReference}: ${lineItem.evidence}`
+        : photoInferenceReference,
+      enrichment.fetchedAt
+    );
+
+    if (renovationFacts !== beforeFacts) {
+      appliedRenovationLineItems += 1;
+    }
+  }
+
+  const renovationEstimates = [
+    {
+      factKey: "renovation.expected_cost",
+      label: renovationFactLabels.expected,
+      value: enrichment.updates.renovationExpectedCost
+    },
+    {
+      factKey: "renovation.estimate_low",
+      label: renovationFactLabels.low,
+      value: enrichment.updates.renovationLowEstimate
+    },
+    {
+      factKey: "renovation.estimate_high",
+      label: renovationFactLabels.high,
+      value: enrichment.updates.renovationHighEstimate
+    }
+  ];
+
+  for (const estimate of renovationEstimates) {
+    if (estimate.value === null) {
+      continue;
+    }
+
+    const beforeFacts = renovationFacts;
+    renovationFacts = upsertInferredPropertyFact(
+      renovationFacts,
+      estimate.factKey,
+      estimate.label,
+      estimate.value,
+      0.65,
+      photoInferenceReference,
+      enrichment.fetchedAt
+    );
+
+    if (renovationFacts !== beforeFacts) {
+      appliedRenovationEstimates += 1;
+    }
+  }
+
+  const didApplyRenovation =
+    appliedRenovationScopes > 0 ||
+    appliedRenovationLineItems > 0 ||
+    appliedRenovationEstimates > 0;
+  const changed =
+    shouldApplyPrice || shouldApplyPhoto || shouldApplyStyle || didApplyRenovation;
 
   return {
     property: refreshInvestmentFacts({
@@ -370,14 +528,17 @@ function mergeEnrichmentIntoProperty(
       houseStyle: shouldApplyStyle
         ? enrichment.updates.houseStyle
         : property.houseStyle,
-      facts,
+      facts: renovationFacts,
       updatedAt: changed ? enrichment.fetchedAt : property.updatedAt
     }),
     changed,
     appliedFields: [
       shouldApplyPrice ? "price" : null,
       shouldApplyPhoto ? "photo" : null,
-      shouldApplyStyle ? "style" : null
+      shouldApplyStyle ? "style" : null,
+      appliedRenovationScopes > 0 ? "renovation scope" : null,
+      appliedRenovationLineItems > 0 ? "renovation line items" : null,
+      appliedRenovationEstimates > 0 ? "renovation estimate" : null
     ].filter(Boolean) as string[]
   };
 }
@@ -823,8 +984,19 @@ export function PropertyManager() {
       let enrichedProperty = merged.property;
       const appliedFields = [...merged.appliedFields];
       const warnings = [...enrichment.warnings];
+      const diagnostics: PropertyEnrichmentDiagnostic[] = [
+        ...enrichment.diagnostics
+      ];
 
       if (activeProfile && canCalculateDriveTime(enrichedProperty, activeProfile)) {
+        diagnostics.push(
+          createPropertyDiagnostic(
+            "drive time",
+            "started",
+            "Calculating drive time.",
+            `Profile: ${activeProfile.name}`
+          )
+        );
         const driveTimeResponse = await fetch(
           "/api/properties/calculate-drive-time",
           {
@@ -851,6 +1023,25 @@ export function PropertyManager() {
 
           if (driveTime.driveTimeMinutes !== null) {
             appliedFields.push("drive time");
+            diagnostics.push(
+              createPropertyDiagnostic(
+                "drive time",
+                "success",
+                "Drive time calculated.",
+                `${driveTime.driveTimeMinutes} minutes, ${
+                  driveTime.distanceMiles ?? "unknown"
+                } miles`
+              )
+            );
+          } else {
+            diagnostics.push(
+              createPropertyDiagnostic(
+                "drive time",
+                "warning",
+                "Drive time was not calculated.",
+                driveTime.warnings.join(" ") || "No route result returned."
+              )
+            );
           }
 
           warnings.push(...driveTime.warnings);
@@ -859,9 +1050,41 @@ export function PropertyManager() {
           typeof driveTimePayload.error === "string"
         ) {
           warnings.push(driveTimePayload.error);
+          diagnostics.push(
+            createPropertyDiagnostic(
+              "drive time",
+              "failed",
+              "Drive time request failed.",
+              driveTimePayload.error
+            )
+          );
         }
+      } else if (activeProfile) {
+        diagnostics.push(
+          createPropertyDiagnostic(
+            "drive time",
+            "skipped",
+            "Drive time calculation skipped.",
+            canCalculateDriveTime(enrichedProperty, activeProfile)
+              ? "Drive time was available but not requested."
+              : "Property address or active profile commute anchor is missing."
+          )
+        );
+      } else {
+        diagnostics.push(
+          createPropertyDiagnostic(
+            "drive time",
+            "skipped",
+            "Drive time calculation skipped.",
+            "No active search profile is loaded."
+          )
+        );
       }
 
+      enrichedProperty = {
+        ...enrichedProperty,
+        enrichmentDiagnostics: diagnostics.slice(-80)
+      };
       const nextPropertyState = upsertProperty(propertyState, enrichedProperty);
       const persistedState = savePropertyState(
         window.localStorage,
@@ -1337,6 +1560,9 @@ export function PropertyManager() {
                 {activeTab === "notes" ? (
                   <NotesTab draft={draft} updateDraft={updateDraft} />
                 ) : null}
+                {activeTab === "diagnostics" ? (
+                  <DiagnosticsTab diagnostics={draft.enrichmentDiagnostics} />
+                ) : null}
                 {activeTab === "scoring" ? (
                   <ScoringTab
                     activeProfileName={activeProfile?.name ?? null}
@@ -1802,17 +2028,31 @@ function upsertNumberFact(
   facts: PropertyFact[],
   factKey: string,
   label: string,
-  value: number | null
+  value: number | null,
+  sourceType: PropertyFactSourceType = "user_entered",
+  sourceReference = "Financials"
 ) {
   if (value === null) {
     return facts.filter((fact) => fact.factKey !== factKey);
   }
 
   const existingFact = facts.find((fact) => fact.factKey === factKey);
+  const observedAt = new Date().toISOString();
 
   if (existingFact) {
     return facts.map((fact) =>
-      fact.id === existingFact.id ? { ...fact, label, value } : fact
+      fact.id === existingFact.id
+        ? {
+            ...fact,
+            label,
+            value,
+            sourceType,
+            sourceReference,
+            confidence: null,
+            verified: false,
+            observedAt
+          }
+        : fact
     );
   }
 
@@ -1822,8 +2062,8 @@ function upsertNumberFact(
       factKey,
       label,
       value,
-      sourceType: "user_entered",
-      sourceReference: "Financials"
+      sourceType,
+      sourceReference
     })
   ];
 }
@@ -1876,13 +2116,17 @@ function refreshInvestmentFacts(property: PropertyRecord): PropertyRecord {
     property.facts,
     "renovation.contingency_amount",
     renovationFactLabels.contingencyAmount,
-    contingencyAmount
+    contingencyAmount,
+    "api",
+    "Financial model"
   );
   facts = upsertNumberFact(
     facts,
     "finance.projected_total_investment",
     renovationFactLabels.projectedTotal,
-    projectedTotal
+    projectedTotal,
+    "api",
+    "Financial model"
   );
 
   return {
@@ -1945,11 +2189,23 @@ function FinancialsTab({
     factId: string,
     patch: Partial<Pick<PropertyFact, "label" | "value">>
   ) {
+    const observedAt = new Date().toISOString();
+
     updateDraft(
       refreshInvestmentFacts({
         ...draft,
         facts: draft.facts.map((fact) =>
-          fact.id === factId ? { ...fact, ...patch } : fact
+          fact.id === factId
+            ? {
+                ...fact,
+                ...patch,
+                sourceType: "user_entered",
+                sourceReference: "Renovation estimate",
+                confidence: null,
+                verified: false,
+                observedAt
+              }
+            : fact
         )
       })
     );
@@ -2311,6 +2567,70 @@ function ScoringTab({
         ) : (
           <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
             No score evaluation has been saved for this property and active profile.
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+function DiagnosticsTab({
+  diagnostics
+}: {
+  diagnostics: PropertyEnrichmentDiagnostic[];
+}) {
+  const latestAt = diagnostics[0]?.at ?? null;
+  const statusVariant: Record<
+    PropertyEnrichmentDiagnostic["status"],
+    React.ComponentProps<typeof Badge>["variant"]
+  > = {
+    started: "secondary",
+    success: "success",
+    warning: "warning",
+    skipped: "outline",
+    failed: "destructive",
+    info: "secondary"
+  };
+
+  return (
+    <div className="grid gap-5">
+      <Section title="Enrichment Diagnostics">
+        {diagnostics.length > 0 ? (
+          <div className="grid gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">
+                Last run {latestAt ? formatEvaluationDateTime(latestAt) : "unknown"}
+              </Badge>
+              <Badge variant="secondary">{diagnostics.length} steps</Badge>
+            </div>
+            <div className="grid gap-3">
+              {diagnostics.map((item) => (
+                <div
+                  key={item.id}
+                  className="grid gap-2 rounded-md border border-border bg-card p-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={statusVariant[item.status]}>
+                      {item.status}
+                    </Badge>
+                    <span className="text-sm font-semibold">{item.stage}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatEvaluationDateTime(item.at)}
+                    </span>
+                  </div>
+                  <div className="text-sm text-foreground">{item.message}</div>
+                  {item.detail ? (
+                    <div className="whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">
+                      {item.detail}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+            No enrichment diagnostics have been recorded for this property.
           </div>
         )}
       </Section>

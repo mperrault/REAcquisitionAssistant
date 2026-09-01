@@ -54,6 +54,19 @@ export const propertyFactSchema = z.object({
 
 export type PropertyFact = z.infer<typeof propertyFactSchema>;
 
+export const propertyEnrichmentDiagnosticSchema = z.object({
+  id: z.string().min(1),
+  at: z.string().datetime(),
+  stage: z.string().min(1),
+  status: z.enum(["started", "success", "warning", "skipped", "failed", "info"]),
+  message: z.string().min(1),
+  detail: z.string()
+});
+
+export type PropertyEnrichmentDiagnostic = z.infer<
+  typeof propertyEnrichmentDiagnosticSchema
+>;
+
 const nullableNumberSchema = z.number().nonnegative().nullable();
 const nullableIntegerSchema = z.number().int().nonnegative().nullable();
 
@@ -89,6 +102,7 @@ export const propertyRecordSchema = z.object({
   listingRemarks: z.string(),
   notes: z.string(),
   facts: z.array(propertyFactSchema),
+  enrichmentDiagnostics: z.array(propertyEnrichmentDiagnosticSchema).default([]),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });

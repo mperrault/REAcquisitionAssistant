@@ -54,6 +54,10 @@ describe("listing page enrichment", () => {
     expect(result.updates.primaryPhotoUrl).toBe(
       "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg"
     );
+    expect(result.diagnostics.some((item) => item.stage === "listing fetch")).toBe(
+      true
+    );
+    expect(result.diagnostics.some((item) => item.stage === "price")).toBe(true);
     expect(result.warnings).toEqual([]);
   });
 
@@ -135,6 +139,26 @@ describe("listing page enrichment", () => {
     );
   });
 
+  it("infers house style from listing remarks when page fetch is rate limited", async () => {
+    const result = await enrichListingCandidate(
+      {
+        ...baseCandidate,
+        inferStyle: true,
+        listingRemarks:
+          "Well-kept Cape with two bedrooms and a compact Stafford lot."
+      },
+      async () => createFetchResponse("", 429)
+    );
+
+    expect(result.updates.houseStyle).toBe("Cape");
+    expect(result.updates.styleFactKey).toBe("style.cape");
+    expect(result.updates.styleSource).toBe("listing_text");
+    expect(result.warnings).toContain("Listing page fetch failed with HTTP 429.");
+    expect(result.warnings).not.toContain(
+      "House style inference failed: listing page fetch failed with HTTP 429."
+    );
+  });
+
   it("explains when style text inference fails and no photo can be analyzed", async () => {
     const result = await enrichListingCandidate(
       {
@@ -180,6 +204,13 @@ describe("listing page enrichment", () => {
           return createFetchResponse(`<html>
             <head>
               <meta property="og:image" content="https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg" />
+              <script type="application/ld+json">
+                {
+                  "@type": "SingleFamilyResidence",
+                  "address": "47 High St, Stafford, CT 06076",
+                  "offers": { "price": "315000" }
+                }
+              </script>
             </head>
             <body>47 High St Stafford CT 06076 Detached home.</body>
           </html>`);
@@ -193,6 +224,206 @@ describe("listing page enrichment", () => {
       expect(result.updates.styleFactKey).toBe("style.ranch");
       expect(result.updates.styleConfidence).toBe(0.72);
       expect(result.updates.styleSource).toBe("photo_inference");
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
+  it("infers renovation scope and estimates from listing photos", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const requestedUrls: string[] = [];
+
+    try {
+      const result = await enrichListingCandidate(
+        {
+          ...baseCandidate,
+          inferRenovation: true
+        },
+        async (input) => {
+          requestedUrls.push(input);
+
+          if (input.includes("api.openai.com")) {
+            return createJsonResponse({
+              output_text: JSON.stringify({
+                scopeFacts: [
+                  {
+                    factKey: "renovation.kitchen",
+                    confidence: 0.74,
+                    evidence: "Kitchen finishes appear dated."
+                  }
+                ],
+                lineItems: [
+                  {
+                    label: "Kitchen refresh",
+                    amount: 18000,
+                    confidence: 0.7,
+                    evidence: "Older cabinets and counters are visible."
+                  }
+                ],
+                expectedCost: 18000,
+                lowEstimate: 12000,
+                highEstimate: 26000
+              })
+            });
+          }
+
+          return createFetchResponse(`<html>
+            <head>
+              <meta property="og:image" content="https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg" />
+              <script type="application/ld+json">
+                {
+                  "@type": "SingleFamilyResidence",
+                  "address": "47 High St, Stafford, CT 06076",
+                  "offers": { "price": "315000" }
+                }
+              </script>
+            </head>
+            <body>47 High St Stafford CT 06076 Detached home.</body>
+          </html>`);
+        }
+      );
+
+      expect(requestedUrls.some((url) => url.includes("api.openai.com"))).toBe(
+        true
+      );
+      expect(result.updates.renovationScopeFacts).toEqual([
+        {
+          factKey: "renovation.kitchen",
+          label: "Kitchen",
+          confidence: 0.74,
+          evidence: "Kitchen finishes appear dated."
+        }
+      ]);
+      expect(result.updates.renovationLineItems).toEqual([
+        {
+          factKey: "renovation.line_item.kitchen_refresh",
+          label: "Kitchen refresh",
+          amount: 18000,
+          confidence: 0.7,
+          evidence: "Older cabinets and counters are visible."
+        }
+      ]);
+      expect(result.updates.renovationExpectedCost).toBe(18000);
+      expect(result.updates.renovationLowEstimate).toBe(12000);
+      expect(result.updates.renovationHighEstimate).toBe(26000);
+      expect(result.warnings).toEqual([]);
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
+  it("falls back to listing remarks for renovation scope when photos cannot be analyzed", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    try {
+      const result = await enrichListingCandidate(
+        {
+          ...baseCandidate,
+          inferRenovation: true,
+          listingRemarks:
+            "Three bedroom home with lots of possibilities, with some TLC you can make it your own. Being sold As Is."
+        },
+        async () => createFetchResponse("Too Many Requests", 429)
+      );
+
+      expect(result.warnings).toContain("Listing page fetch failed with HTTP 429.");
+      expect(result.warnings).toContain(
+        "renovation inference skipped because no eligible listing photo URL was available"
+      );
+      expect(result.updates.renovationScopeFacts).toMatchObject([
+        {
+          factKey: "renovation.paint",
+          label: "Paint",
+          confidence: 0.62
+        },
+        {
+          factKey: "renovation.flooring",
+          label: "Flooring",
+          confidence: 0.58
+        }
+      ]);
+      expect(result.updates.renovationScopeFacts[0]?.evidence).toContain("TLC");
+      expect(result.updates.renovationLineItems).toMatchObject([
+        {
+          factKey: "renovation.line_item.general_cosmetic_refresh",
+          label: "General cosmetic refresh",
+          amount: 20000,
+          confidence: 0.6
+        }
+      ]);
+      expect(result.updates.renovationLineItems[0]?.evidence).toContain("TLC");
+      expect(result.updates.renovationExpectedCost).toBe(20000);
+      expect(result.updates.renovationLowEstimate).toBe(12000);
+      expect(result.updates.renovationHighEstimate).toBe(32000);
+      expect(
+        result.diagnostics.some(
+          (item) =>
+            item.stage === "renovation" &&
+            item.status === "success" &&
+            item.message === "Renovation inference produced facts."
+        )
+      ).toBe(true);
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
+  it("uses existing listing photos for renovation inference when page fetch is rate limited", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+
+    try {
+      const result = await enrichListingCandidate(
+        {
+          ...baseCandidate,
+          inferRenovation: true,
+          primaryPhotoUrl:
+            "https://photos.zillowstatic.com/fp/existing-kitchen-photo.jpg"
+        },
+        async (input) => {
+          if (input.includes("api.openai.com")) {
+            return createJsonResponse({
+              output_text: JSON.stringify({
+                scopeFacts: [
+                  {
+                    factKey: "renovation.flooring",
+                    confidence: 0.63,
+                    evidence: "Worn flooring is visible."
+                  }
+                ],
+                lineItems: [],
+                expectedCost: 6000,
+                lowEstimate: 4000,
+                highEstimate: 9000
+              })
+            });
+          }
+
+          return createFetchResponse("Too Many Requests", 429);
+        }
+      );
+
+      expect(result.warnings).toContain("Listing page fetch failed with HTTP 429.");
+      expect(result.updates.renovationScopeFacts[0]).toMatchObject({
+        factKey: "renovation.flooring",
+        label: "Flooring",
+        confidence: 0.63
+      });
+      expect(result.updates.renovationExpectedCost).toBe(6000);
     } finally {
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;

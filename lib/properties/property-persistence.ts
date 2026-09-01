@@ -68,6 +68,7 @@ export function createPropertyRecord(
     listingRemarks: patch.listingRemarks ?? "",
     notes: patch.notes ?? "",
     facts: patch.facts ?? [],
+    enrichmentDiagnostics: patch.enrichmentDiagnostics ?? [],
     createdAt: patch.createdAt ?? timestamp,
     updatedAt: patch.updatedAt ?? timestamp
   });

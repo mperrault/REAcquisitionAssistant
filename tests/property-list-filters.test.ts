@@ -80,7 +80,7 @@ describe("property list score filters", () => {
         hardRejected: true,
         normalizedScore: 34,
         scoreLabel: "Rejected by Profile",
-        missingData: ["Renovation scope and expected cost are missing."]
+        missingData: ["Renovation scope is missing."]
       })
     );
     const baseInput = {
