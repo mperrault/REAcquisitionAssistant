@@ -6,6 +6,7 @@ import type {
 import { matchesTownPreference } from "@/lib/profiles/town-matching";
 import type { PropertyRecord } from "@/lib/properties/types";
 import {
+  type ScoreBadge,
   type RuleResult,
   type ScoreEvaluation,
   scoringEngineVersion,
@@ -138,6 +139,36 @@ const strongResaleSettingKeys = [
   "setting.woods_privacy"
 ];
 
+const waterSettingKeys = [
+  "setting.river_frontage",
+  "setting.lake_view",
+  "setting.pond_view",
+  "setting.lake_frontage",
+  "setting.pond_frontage",
+  "setting.waterfront_or_water_access"
+];
+
+const cosmeticRenovationKeys = [
+  "renovation.paint",
+  "renovation.flooring",
+  "renovation.kitchen",
+  "renovation.bathrooms",
+  "renovation.lighting",
+  "renovation.landscaping",
+  "renovation.windows",
+  "renovation.siding",
+  "renovation.deck_porch",
+  "renovation.minor_layout"
+];
+
+const majorRenovationKeys = [
+  "renovation.foundation_repair",
+  "renovation.structural_rehabilitation",
+  "renovation.whole_house_gut",
+  "renovation.major_addition",
+  "renovation.extensive_systems_replacement"
+];
+
 function inferRenovationScopeFactKey(factKey: string, label: string) {
   if (!factKey.startsWith("renovation.line_item.")) {
     return null;
@@ -149,6 +180,36 @@ function inferRenovationScopeFactKey(factKey: string, label: string) {
     renovationScopeFromText.find((scope) => scope.pattern.test(searchText))
       ?.factKey ?? null
   );
+}
+
+function hasTruthyFact(facts: FactIndex, keys: string[]) {
+  return keys.some((key) => isTruthyFact(facts.get(key) ?? null));
+}
+
+function hasRenovationFact(facts: FactIndex) {
+  return [...facts.keys()].some((key) => key.startsWith("renovation."));
+}
+
+function getRenovationLineItemTotal(facts: FactIndex) {
+  return [...facts.entries()]
+    .filter(([key]) => key.startsWith("renovation.line_item."))
+    .reduce((total, [, value]) => total + (asNumber(value) ?? 0), 0);
+}
+
+function getExpectedRenovationCost(facts: FactIndex) {
+  const storedCost = asNumber(facts.get("renovation.expected_cost"));
+
+  if (storedCost !== null) {
+    return storedCost;
+  }
+
+  const lineItemTotal = getRenovationLineItemTotal(facts);
+
+  if (lineItemTotal > 0) {
+    return lineItemTotal;
+  }
+
+  return hasRenovationFact(facts) ? null : 0;
 }
 
 function createFactIndex(property: PropertyRecord, profile: SearchProfile): FactIndex {
@@ -230,6 +291,14 @@ function createFactIndex(property: PropertyRecord, profile: SearchProfile): Fact
 
   const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
 
+  if (basePrice !== null && property.livingSqft !== null && property.livingSqft > 0) {
+    const pricePerSqft = Math.round(basePrice / property.livingSqft);
+
+    setDerivedFact("financial.price_per_sqft", pricePerSqft);
+    setDerivedFact("financial.low_price_per_sqft", pricePerSqft <= 275);
+    setDerivedFact("financial.very_low_price_per_sqft", pricePerSqft <= 220);
+  }
+
   if (basePrice !== null && profile.budget.purchasePriceTarget !== null) {
     setDerivedFact(
       "resale.below_purchase_target",
@@ -249,8 +318,17 @@ function createFactIndex(property: PropertyRecord, profile: SearchProfile): Fact
   }
 
   setDerivedFact(
+    "setting.waterfront_or_water_access",
+    hasTruthyFact(facts, waterSettingKeys)
+  );
+
+  setDerivedFact(
     "resale.strong_setting",
-    strongResaleSettingKeys.some((key) => isTruthyFact(facts.get(key) ?? null))
+    hasTruthyFact(facts, strongResaleSettingKeys)
+  );
+  setDerivedFact(
+    "resale.waterfront_demand",
+    hasTruthyFact(facts, waterSettingKeys)
   );
 
   return facts;
@@ -430,12 +508,7 @@ function evaluateBudget(
     return;
   }
 
-  const renovationLineItemTotal = [...facts.entries()]
-    .filter(([key]) => key.startsWith("renovation.line_item."))
-    .reduce((total, [, value]) => total + (asNumber(value) ?? 0), 0);
-  const expectedRenovationCost =
-    asNumber(facts.get("renovation.expected_cost")) ??
-    (renovationLineItemTotal > 0 ? renovationLineItemTotal : null);
+  const expectedRenovationCost = getExpectedRenovationCost(facts);
   const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
   const contingencyAmount = asNumber(facts.get("renovation.contingency_amount"));
   const closingCosts = asNumber(facts.get("finance.closing_costs"));
@@ -480,7 +553,7 @@ function evaluateBudget(
     detail = "Projected total investment is above maximum.";
   }
 
-  const points = round(categoryWeight * fraction);
+  const points = round(categoryWeight * 0.65 * fraction);
   addCategoryScore(categoryScores, "financial", points, categoryWeight);
 
   if (fraction >= 0.7) {
@@ -504,6 +577,97 @@ function evaluateBudget(
   }
 }
 
+function evaluateRenovationCondition(
+  property: PropertyRecord,
+  profile: SearchProfile,
+  facts: FactIndex,
+  categoryScores: Record<ProfileCategory, number>,
+  positiveFactors: RuleResult[],
+  penalties: RuleResult[],
+  missingData: string[]
+) {
+  const categoryWeight = getCategoryWeight(profile, "renovation");
+  if (categoryWeight <= 0) {
+    return;
+  }
+
+  const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+  const hasConditionContext =
+    hasRenovationFact(facts) ||
+    basePrice !== null ||
+    Boolean(property.listingRemarks.trim()) ||
+    property.photoUrls.length > 0 ||
+    property.photoEvidence.length > 0;
+
+  if (!hasConditionContext) {
+    missingData.push("Renovation condition is unknown.");
+    return;
+  }
+
+  const expectedCost = getExpectedRenovationCost(facts);
+  const hasMajorScope = hasTruthyFact(facts, majorRenovationKeys);
+  const hasCosmeticScope = hasTruthyFact(facts, cosmeticRenovationKeys);
+  let fraction = 1;
+  let detail = "No material renovation need is known.";
+
+  if (expectedCost === null) {
+    if (hasRenovationFact(facts)) {
+      missingData.push("Renovation scope is present but expected cost is missing.");
+    }
+
+    fraction = hasRenovationFact(facts) ? 0.55 : 1;
+    detail = hasRenovationFact(facts)
+      ? "Renovation scope exists, but expected cost is missing."
+      : "No renovation scope or cost has been recorded.";
+  } else if (expectedCost <= 10000 && !hasMajorScope) {
+    fraction = 1;
+    detail = "Expected renovation cost is minimal.";
+  } else if (expectedCost <= 35000 && !hasMajorScope) {
+    fraction = 0.85;
+    detail = "Expected renovation cost is light.";
+  } else if (expectedCost <= (profile.budget.renovationBudgetTarget ?? 75000)) {
+    fraction = 0.65;
+    detail = "Expected renovation cost is moderate.";
+  } else if (expectedCost <= (profile.budget.renovationBudgetMax ?? 125000)) {
+    fraction = 0.35;
+    detail = "Expected renovation cost is high.";
+  } else {
+    fraction = 0.1;
+    detail = "Expected renovation cost exceeds renovation budget.";
+  }
+
+  if (hasMajorScope) {
+    fraction = Math.min(fraction, 0.2);
+    detail = "Major renovation scope is present.";
+  } else if (hasCosmeticScope && expectedCost === 0) {
+    fraction = Math.min(fraction, 0.85);
+    detail = "Cosmetic renovation scope is present without an expected cost.";
+  }
+
+  const points = round(categoryWeight * fraction);
+  addCategoryScore(categoryScores, "renovation", points, categoryWeight);
+
+  if (fraction >= 0.85) {
+    positiveFactors.push({
+      ruleKey: "renovation.condition_fit",
+      label: "Renovation burden",
+      category: "renovation",
+      result: "bonus",
+      points,
+      detail
+    });
+  } else {
+    penalties.push({
+      ruleKey: "renovation.condition_fit",
+      label: "Renovation burden",
+      category: "renovation",
+      result: "penalty",
+      points: round(points - categoryWeight),
+      detail
+    });
+  }
+}
+
 function evaluateFeaturePreferences(
   profile: SearchProfile,
   facts: FactIndex,
@@ -518,6 +682,10 @@ function evaluateFeaturePreferences(
   );
 
   for (const preference of enabledFeatures) {
+    if (preference.category === "renovation") {
+      continue;
+    }
+
     const value = facts.get(preference.featureKey);
     const categoryWeight = getCategoryWeight(profile, preference.category);
 
@@ -583,7 +751,9 @@ function evaluateFeaturePreferences(
   const hasSettingPreferences = enabledFeatures.some(
     (preference) => preference.category === "setting" && preference.mode === "bonus"
   );
-  const hasSettingFacts = [...facts.keys()].some((key) => key.startsWith("setting."));
+  const hasSettingFacts = [...facts.entries()].some(
+    ([key, value]) => key.startsWith("setting.") && isTruthyFact(value)
+  );
 
   if (hasSettingPreferences && !hasSettingFacts) {
     missingData.push("Setting and view facts are missing.");
@@ -608,16 +778,95 @@ function evaluateFeaturePreferences(
     );
   }
 
-  const hasRenovationPreferences = enabledFeatures.some(
-    (preference) => preference.category === "renovation"
-  );
-  const hasRenovationFacts = [...facts.keys()].some((key) =>
-    key.startsWith("renovation.")
-  );
+}
 
-  if (hasRenovationPreferences && !hasRenovationFacts) {
-    missingData.push("Renovation scope is missing.");
+function createScoreBadge(
+  key: string,
+  label: string,
+  tone: ScoreBadge["tone"],
+  detail: string
+): ScoreBadge {
+  return { key, label, tone, detail };
+}
+
+function createScoreBadges(
+  facts: FactIndex,
+  property: PropertyRecord,
+  profile: SearchProfile
+) {
+  const badges: ScoreBadge[] = [];
+  const expectedRenovationCost = getExpectedRenovationCost(facts);
+  const hasMajorScope = hasTruthyFact(facts, majorRenovationKeys);
+  const hasCosmeticScope = hasTruthyFact(facts, cosmeticRenovationKeys);
+  const hasWaterSetting = hasTruthyFact(facts, waterSettingKeys);
+  const pricePerSqft = asNumber(facts.get("financial.price_per_sqft"));
+  const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+  const isLowPricePerSqft = isTruthyFact(
+    facts.get("financial.low_price_per_sqft") ?? null
+  );
+  const isBelowPurchaseTarget =
+    basePrice !== null &&
+    profile.budget.purchasePriceTarget !== null &&
+    basePrice <= profile.budget.purchasePriceTarget;
+
+  if (hasWaterSetting) {
+    badges.push(
+      createScoreBadge(
+        "waterfront_or_water_access",
+        "Water Setting",
+        "success",
+        "Listing facts indicate frontage, water view, or water access."
+      )
+    );
   }
+
+  if (isLowPricePerSqft || isBelowPurchaseTarget) {
+    badges.push(
+      createScoreBadge(
+        "value_candidate",
+        "Value Candidate",
+        "success",
+        pricePerSqft !== null
+          ? `$${pricePerSqft}/sqft is favorable for the profile.`
+          : "Purchase price is below the profile target."
+      )
+    );
+  }
+
+  if (
+    expectedRenovationCost !== null &&
+    expectedRenovationCost <= 10000 &&
+    !hasMajorScope
+  ) {
+    badges.push(
+      createScoreBadge(
+        "turnkey_candidate",
+        "Turnkey Candidate",
+        "secondary",
+        "Expected renovation need is minimal."
+      )
+    );
+  }
+
+  if (
+    expectedRenovationCost !== null &&
+    expectedRenovationCost > 10000 &&
+    expectedRenovationCost <= (profile.budget.renovationBudgetMax ?? 125000) &&
+    hasCosmeticScope &&
+    !hasMajorScope &&
+    (isLowPricePerSqft || isBelowPurchaseTarget || hasWaterSetting)
+  ) {
+    badges.push(
+      createScoreBadge(
+        "reno_candidate",
+        "Reno Candidate",
+        "warning",
+        "Cosmetic renovation need may be worthwhile given price or setting."
+      )
+    );
+  }
+
+  return badges;
 }
 
 function scoreLabel(profile: SearchProfile, normalizedScore: number, hardRejected: boolean) {
@@ -659,6 +908,15 @@ export function evaluateProperty(
     missingData
   );
   evaluateBudget(
+    property,
+    profile,
+    facts,
+    categoryScores,
+    positiveFactors,
+    penalties,
+    missingData
+  );
+  evaluateRenovationCondition(
     property,
     profile,
     facts,
@@ -713,6 +971,7 @@ export function evaluateProperty(
     100
   );
   const hardRejected = hardRejectReasons.length > 0;
+  const badges = createScoreBadges(facts, property, profile);
 
   return scoreEvaluationSchema.parse({
     id: createId(),
@@ -727,6 +986,7 @@ export function evaluateProperty(
     hardRejectReasons,
     positiveFactors: positiveFactors.sort((a, b) => b.points - a.points),
     penalties: penalties.sort((a, b) => a.points - b.points),
+    badges,
     missingData: [...new Set(missingData)],
     categoryScores,
     evaluatedAt

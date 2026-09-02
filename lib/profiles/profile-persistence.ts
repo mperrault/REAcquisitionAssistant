@@ -1,4 +1,5 @@
 import {
+  type CategoryWeight,
   type ProfileState,
   type SearchProfile,
   profileStateSchema,
@@ -6,7 +7,8 @@ import {
 } from "@/lib/profiles/types";
 import {
   quietCornerSeedProfile,
-  quietCornerSeedProfiles
+  quietCornerSeedProfiles,
+  retiredSeedPreferenceKeys
 } from "@/lib/profiles/quiet-corner-seed";
 
 export const PROFILE_STORAGE_KEY = "re-acquisition-assistant.profiles.v1";
@@ -212,6 +214,16 @@ function normalizeActiveProfile(state: ProfileState): ProfileState {
   };
 }
 
+function isSameCategoryWeight(left: CategoryWeight, right: CategoryWeight) {
+  return (
+    left.id === right.id &&
+    left.categoryKey === right.categoryKey &&
+    left.categoryLabel === right.categoryLabel &&
+    left.weight === right.weight &&
+    left.enabled === right.enabled
+  );
+}
+
 function reconcileSeedProfiles(state: ProfileState): ProfileState {
   const existingProfileIds = new Set(state.profiles.map((profile) => profile.id));
   let renamedSeedProfile = false;
@@ -224,7 +236,8 @@ function reconcileSeedProfiles(state: ProfileState): ProfileState {
 
     if (
       profile.id === quietCornerSeedProfile.id &&
-      profile.name === "Quiet Corner Second Home"
+      profile.name !== quietCornerSeedProfile.name &&
+      profile.name === "Quiet Corner Second Home Rehab"
     ) {
       renamedSeedProfile = true;
 
@@ -244,16 +257,41 @@ function reconcileSeedProfiles(state: ProfileState): ProfileState {
     const missingFeaturePreferences = seedProfile.featurePreferences.filter(
       (preference) => !existingFeatureKeys.has(preference.featureKey)
     );
+    const featurePreferences = nextProfile.featurePreferences.filter(
+      (preference) => !retiredSeedPreferenceKeys.has(preference.featureKey)
+    );
+    const removedRetiredPreferences =
+      featurePreferences.length !== nextProfile.featurePreferences.length;
     const existingCategoryKeys = new Set(
       nextProfile.categoryWeights.map((weight) => weight.categoryKey)
     );
     const missingCategoryWeights = seedProfile.categoryWeights.filter(
       (weight) => !existingCategoryKeys.has(weight.categoryKey)
     );
+    const seedCategoryWeightsByKey = new Map(
+      seedProfile.categoryWeights.map((weight) => [weight.categoryKey, weight])
+    );
+    let retunedCategoryWeights = false;
+    const categoryWeights = nextProfile.categoryWeights.map((weight) => {
+      if (weight.categoryKey === "location" || weight.categoryKey === "setting") {
+        return weight;
+      }
+
+      const seedWeight = seedCategoryWeightsByKey.get(weight.categoryKey);
+
+      if (!seedWeight || isSameCategoryWeight(weight, seedWeight)) {
+        return weight;
+      }
+
+      retunedCategoryWeights = true;
+      return seedWeight;
+    });
 
     if (
       missingFeaturePreferences.length === 0 &&
-      missingCategoryWeights.length === 0
+      missingCategoryWeights.length === 0 &&
+      !removedRetiredPreferences &&
+      !retunedCategoryWeights
     ) {
       return nextProfile;
     }
@@ -262,11 +300,11 @@ function reconcileSeedProfiles(state: ProfileState): ProfileState {
 
     return {
       ...nextProfile,
-      featurePreferences: [
-        ...nextProfile.featurePreferences,
-        ...missingFeaturePreferences
-      ],
-      categoryWeights: [...nextProfile.categoryWeights, ...missingCategoryWeights],
+      description: seedProfile.description,
+      strategy: seedProfile.strategy,
+      renovationTolerance: seedProfile.renovationTolerance,
+      featurePreferences: [...featurePreferences, ...missingFeaturePreferences],
+      categoryWeights: [...categoryWeights, ...missingCategoryWeights],
       version: nextProfile.version + 1,
       updatedAt: nowIso()
     };

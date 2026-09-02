@@ -48,28 +48,15 @@ describe("profile persistence", () => {
     const storage = new MemoryStorage();
     const result = loadProfileState(storage);
     const profile = firstProfile(result.state);
-    const turnkeyProfile = result.state.profiles.find(
-      (item) => item.id === "seed-quiet-corner-turnkey"
-    );
 
     expect(result.source).toBe("seed");
-    expect(result.state.profiles).toHaveLength(2);
-    expect(profile.name).toBe("Quiet Corner Second Home Rehab");
+    expect(result.state.profiles).toHaveLength(1);
+    expect(profile.name).toBe("Quiet Corner Second Home");
     expect(profile.isActive).toBe(true);
     expect(profile.townPreferences).toHaveLength(14);
     expect(profile.featurePreferences.length).toBeGreaterThan(30);
-    expect(profile.categoryWeights).toHaveLength(8);
+    expect(profile.categoryWeights).toHaveLength(9);
     expect(profile.scoreThresholds).toHaveLength(5);
-    expect(turnkeyProfile).toMatchObject({
-      name: "Quiet Corner Turnkey",
-      isActive: false,
-      renovationTolerance: "turnkey_minimal_refresh",
-      budget: {
-        renovationBudgetMax: 15000,
-        totalProjectBudgetTarget: 400000,
-        totalProjectBudgetMax: 450000
-      }
-    });
   });
 
   it("reconciles stored seed profiles without wiping user edits", () => {
@@ -97,22 +84,15 @@ describe("profile persistence", () => {
     const rehabProfile = result.state.profiles.find(
       (profile) => profile.id === oldSeed.id
     );
-    const turnkeyProfile = result.state.profiles.find(
-      (profile) => profile.id === "seed-quiet-corner-turnkey"
-    );
 
     expect(result.source).toBe("storage");
-    expect(result.state.profiles).toHaveLength(2);
+    expect(result.state.profiles).toHaveLength(1);
     expect(rehabProfile).toMatchObject({
-      name: "Quiet Corner Second Home Rehab",
+      name: "Quiet Corner Second Home",
       budget: {
         totalProjectBudgetTarget: 425000
       },
       isActive: true
-    });
-    expect(turnkeyProfile).toMatchObject({
-      name: "Quiet Corner Turnkey",
-      isActive: false
     });
   });
 
@@ -260,7 +240,7 @@ describe("profile persistence", () => {
       "2026-08-10T19:05:00.000Z"
     );
 
-    expect(activated.profiles).toHaveLength(3);
+    expect(activated.profiles).toHaveLength(2);
     expect(activated.activeProfileId).toBe("profile-copy");
     expect(activated.profiles.filter((profile) => profile.isActive)).toHaveLength(1);
     expect(
@@ -282,15 +262,14 @@ describe("profile persistence", () => {
       "2026-08-10T20:10:00.000Z"
     );
 
-    expect(archived.activeProfileId).toBe("seed-quiet-corner-turnkey");
+    expect(archived.activeProfileId).toBe("profile-copy");
     expect(archived.profiles.find((profile) => profile.id === firstProfile(state).id))
       .toMatchObject({
         isActive: false,
         isArchived: true
       });
     expect(
-      archived.profiles.find((profile) => profile.id === "seed-quiet-corner-turnkey")
-        ?.isActive
+      archived.profiles.find((profile) => profile.id === "profile-copy")?.isActive
     ).toBe(true);
   });
 });

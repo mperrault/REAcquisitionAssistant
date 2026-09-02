@@ -1,7 +1,6 @@
 import type {
   CategoryWeight,
   FeaturePreference,
-  PreferenceMode,
   ProfileCategory,
   ScoreThreshold,
   SearchProfile,
@@ -32,16 +31,16 @@ const townData = [
 ] as const;
 
 const settingPreferences = [
-  ["setting.country_mountain_view", "Country / Mountain View", 1, 18],
-  ["setting.open_fields_pastoral", "Open Fields / Pastoral", 2, 16],
-  ["setting.horse_property", "Horse Property", 3, 14],
-  ["setting.small_farm", "Small Farm", 4, 13],
-  ["setting.river_frontage", "River Frontage", 5, 12],
-  ["setting.lake_view", "Lake View", 6, 10],
-  ["setting.pond_view", "Pond View", 7, 8],
-  ["setting.lake_frontage", "Lake Frontage", 8, 7],
-  ["setting.pond_frontage", "Pond Frontage", 9, 6],
-  ["setting.historic_new_england", "Historic New England Setting", 10, 5],
+  ["setting.waterfront_or_water_access", "Waterfront / Water Access", 1, 12],
+  ["setting.lake_frontage", "Lake Frontage", 2, 18],
+  ["setting.pond_frontage", "Pond Frontage", 3, 16],
+  ["setting.river_frontage", "River Frontage", 4, 16],
+  ["setting.lake_view", "Lake View", 5, 14],
+  ["setting.pond_view", "Pond View", 6, 12],
+  ["setting.country_mountain_view", "Country / Mountain View", 7, 12],
+  ["setting.open_fields_pastoral", "Open Fields / Pastoral", 8, 10],
+  ["setting.horse_property", "Horse Property", 9, 8],
+  ["setting.small_farm", "Small Farm", 10, 8],
   ["setting.woods_privacy", "Woods / Privacy", 11, 4]
 ] as const;
 
@@ -93,73 +92,50 @@ function categoryFromFeatureKey(featureKey: string): ProfileCategory {
   return "utility";
 }
 
-const renovationScope = [
-  ["renovation.paint", "Paint", "bonus", 2],
-  ["renovation.flooring", "Flooring", "bonus", 2],
-  ["renovation.kitchen", "Kitchen", "bonus", 3],
-  ["renovation.bathrooms", "Bathrooms", "bonus", 3],
-  ["renovation.lighting", "Lighting", "bonus", 1],
-  ["renovation.landscaping", "Landscaping", "bonus", 1],
-  ["renovation.windows", "Windows", "bonus", 1],
-  ["renovation.siding", "Siding", "bonus", 1],
-  ["renovation.deck_porch", "Deck / porch", "bonus", 1],
-  ["renovation.minor_layout", "Minor layout changes", "bonus", 2],
-  ["renovation.foundation_repair", "Foundation repair", "penalty", -12],
-  ["renovation.structural_rehabilitation", "Structural rehabilitation", "penalty", -14],
-  ["renovation.whole_house_gut", "Whole-house gut renovation", "penalty", -16],
-  ["renovation.major_addition", "Major addition", "penalty", -12],
-  [
-    "renovation.extensive_systems_replacement",
-    "Extensive electrical/plumbing replacement",
-    "penalty",
-    -12
-  ]
+const retiredRenovationPreferenceKeys = [
+  "renovation.paint",
+  "renovation.flooring",
+  "renovation.kitchen",
+  "renovation.bathrooms",
+  "renovation.lighting",
+  "renovation.landscaping",
+  "renovation.windows",
+  "renovation.siding",
+  "renovation.deck_porch",
+  "renovation.minor_layout",
+  "renovation.foundation_repair",
+  "renovation.structural_rehabilitation",
+  "renovation.whole_house_gut",
+  "renovation.major_addition",
+  "renovation.extensive_systems_replacement"
+] as const;
+
+export const retiredSeedPreferenceKeys = new Set<string>([
+  ...retiredRenovationPreferenceKeys
+]);
+
+const financialPreferences = [
+  ["financial.low_price_per_sqft", "Low price per sqft", 1, 8],
+  ["financial.very_low_price_per_sqft", "Very low price per sqft", 2, 4]
 ] as const;
 
 const resalePreferences = [
   ["resale.strong_setting", "Strong scarce setting", 1, 4],
-  ["resale.desirable_town", "Desirable Quiet Corner town", 2, 3],
-  ["resale.below_purchase_target", "Below purchase target", 3, 2],
-  ["resale.three_plus_bedrooms", "3+ bedrooms", 4, 1],
-  ["resale.two_plus_baths", "2+ baths", 5, 1],
-  ["resale.usable_acreage", "Usable acreage", 6, 1]
-] as const;
-
-const turnkeyRenovationScope = [
-  ["renovation.paint", "Paint", "bonus", 2],
-  ["renovation.flooring", "Flooring", "bonus", 1],
-  ["renovation.kitchen", "Kitchen", "penalty", -8],
-  ["renovation.bathrooms", "Bathrooms", "penalty", -8],
-  ["renovation.lighting", "Lighting", "bonus", 1],
-  ["renovation.landscaping", "Landscaping", "bonus", 1],
-  ["renovation.windows", "Windows", "penalty", -6],
-  ["renovation.siding", "Siding", "penalty", -6],
-  ["renovation.deck_porch", "Deck / porch", "penalty", -4],
-  ["renovation.minor_layout", "Minor layout changes", "penalty", -6],
-  ["renovation.foundation_repair", "Foundation repair", "penalty", -16],
-  [
-    "renovation.structural_rehabilitation",
-    "Structural rehabilitation",
-    "penalty",
-    -18
-  ],
-  ["renovation.whole_house_gut", "Whole-house gut renovation", "penalty", -20],
-  ["renovation.major_addition", "Major addition", "penalty", -16],
-  [
-    "renovation.extensive_systems_replacement",
-    "Extensive electrical/plumbing replacement",
-    "penalty",
-    -16
-  ]
+  ["resale.waterfront_demand", "Waterfront resale demand", 2, 5],
+  ["resale.desirable_town", "Desirable Quiet Corner town", 3, 3],
+  ["resale.below_purchase_target", "Below purchase target", 4, 2],
+  ["resale.three_plus_bedrooms", "3+ bedrooms", 5, 1],
+  ["resale.two_plus_baths", "2+ baths", 6, 1],
+  ["resale.usable_acreage", "Usable acreage", 7, 1]
 ] as const;
 
 export const quietCornerSeedProfile: SearchProfile = {
   id: "seed-quiet-corner-second-home",
-  name: "Quiet Corner Second Home Rehab",
+  name: "Quiet Corner Second Home",
   description:
-    "Acquire a dated or cosmetically unattractive home on an exceptional property, then complete a moderate renovation.",
+    "Acquire a well-located Quiet Corner second home with strong setting, value, manageable condition, and resale fundamentals.",
   strategy:
-    "Prioritize scarce setting and resale attributes over current interior finishes.",
+    "Prioritize scarce water/setting attributes, short commute, good value, and manageable renovation exposure.",
   isActive: true,
   isArchived: false,
   version: 1,
@@ -247,15 +223,15 @@ export const quietCornerSeedProfile: SearchProfile = {
         enabled: true
       })
     ),
-    ...renovationScope.map(
-      ([featureKey, featureLabel, mode, weight], index): FeaturePreference => ({
+    ...financialPreferences.map(
+      ([featureKey, featureLabel, rank, weight]): FeaturePreference => ({
         id: `feature-${idFrom(featureKey)}`,
         featureKey,
         featureLabel,
-        category: "renovation",
-        rank: index + 1,
+        category: "financial",
+        rank,
         weight,
-        mode: mode as PreferenceMode,
+        mode: "bonus",
         enabled: true
       })
     ),
@@ -274,14 +250,15 @@ export const quietCornerSeedProfile: SearchProfile = {
   ],
   categoryWeights: (
     [
-    ["location", "Location / commute", 18],
-    ["setting", "Setting / views", 28],
-    ["style", "House character / style", 8],
-    ["renovation", "Renovation fit", 14],
-    ["financial", "Financial fit", 14],
-    ["resale", "Resale potential", 12],
-    ["maintenance", "Maintenance burden", 4],
-    ["risk", "Risk / nuisances", 2]
+      ["location", "Location / commute", 18],
+      ["setting", "Setting / views", 28],
+      ["style", "House character / style", 6],
+      ["renovation", "Condition / renovation burden", 10],
+      ["financial", "Financial fit", 22],
+      ["resale", "Resale potential", 16],
+      ["maintenance", "Maintenance burden", 0],
+      ["risk", "Risk / nuisances", 0],
+      ["utility", "Utilities", 0]
     ] as const
   ).map(
     ([categoryKey, categoryLabel, weight]): CategoryWeight => ({
@@ -289,16 +266,16 @@ export const quietCornerSeedProfile: SearchProfile = {
       categoryKey,
       categoryLabel,
       weight,
-      enabled: true
+      enabled: weight > 0
     })
   ),
   scoreThresholds: (
     [
-    ["Exceptional", 90, 1],
-    ["Strong Candidate", 80, 2],
-    ["Worth Reviewing", 70, 3],
-    ["Marginal", 60, 4],
-    ["Weak Match", 0, 5]
+      ["Exceptional", 90, 1],
+      ["Strong Candidate", 80, 2],
+      ["Worth Reviewing", 70, 3],
+      ["Marginal", 60, 4],
+      ["Weak Match", 0, 5]
     ] as const
   ).map(
     ([label, minimumScore, sortOrder]): ScoreThreshold => ({
@@ -310,55 +287,4 @@ export const quietCornerSeedProfile: SearchProfile = {
   )
 };
 
-export const quietCornerTurnkeySeedProfile: SearchProfile = {
-  ...quietCornerSeedProfile,
-  id: "seed-quiet-corner-turnkey",
-  name: "Quiet Corner Turnkey",
-  description:
-    "Acquire a move-in-ready Quiet Corner second home with exceptional setting and only minimal refresh work.",
-  strategy:
-    "Prioritize scarce setting and resale attributes while avoiding properties that require meaningful renovation.",
-  isActive: false,
-  budget: {
-    ...quietCornerSeedProfile.budget,
-    renovationBudgetTarget: 7500,
-    renovationBudgetMax: 15000
-  },
-  renovationTolerance: "turnkey_minimal_refresh",
-  featurePreferences: [
-    ...quietCornerSeedProfile.featurePreferences.filter(
-      (preference) =>
-        preference.category !== "renovation" &&
-        preference.category !== "resale"
-    ),
-    ...turnkeyRenovationScope.map(
-      ([featureKey, featureLabel, mode, weight], index): FeaturePreference => ({
-        id: `feature-${idFrom(featureKey)}`,
-        featureKey,
-        featureLabel,
-        category: "renovation",
-        rank: index + 1,
-        weight,
-        mode: mode as PreferenceMode,
-        enabled: true
-      })
-    ),
-    ...resalePreferences.map(
-      ([featureKey, featureLabel, rank, weight]): FeaturePreference => ({
-        id: `feature-${idFrom(featureKey)}`,
-        featureKey,
-        featureLabel,
-        category: "resale",
-        rank,
-        weight,
-        mode: "bonus",
-        enabled: true
-      })
-    )
-  ]
-};
-
-export const quietCornerSeedProfiles = [
-  quietCornerSeedProfile,
-  quietCornerTurnkeySeedProfile
-] as const;
+export const quietCornerSeedProfiles = [quietCornerSeedProfile] as const;

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { profileCategorySchema } from "@/lib/profiles/types";
 
-export const scoringEngineVersion = "0.2.0";
+export const scoringEngineVersion = "0.3.0";
 
 export const ruleResultSchema = z.object({
   ruleKey: z.string().min(1),
@@ -14,6 +14,15 @@ export const ruleResultSchema = z.object({
 });
 
 export type RuleResult = z.infer<typeof ruleResultSchema>;
+
+export const scoreBadgeSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  tone: z.enum(["success", "warning", "secondary", "outline"]),
+  detail: z.string()
+});
+
+export type ScoreBadge = z.infer<typeof scoreBadgeSchema>;
 
 export const scoreEvaluationSchema = z.object({
   id: z.string().min(1),
@@ -28,6 +37,7 @@ export const scoreEvaluationSchema = z.object({
   hardRejectReasons: z.array(ruleResultSchema),
   positiveFactors: z.array(ruleResultSchema),
   penalties: z.array(ruleResultSchema),
+  badges: z.array(scoreBadgeSchema).default([]),
   missingData: z.array(z.string()),
   categoryScores: z.record(profileCategorySchema, z.number()),
   evaluatedAt: z.string().datetime()

@@ -8,7 +8,11 @@ import {
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import type { RuleResult, ScoreEvaluation } from "@/lib/scoring/types";
+import type {
+  RuleResult,
+  ScoreBadge,
+  ScoreEvaluation
+} from "@/lib/scoring/types";
 
 type BadgeVariant = React.ComponentProps<typeof Badge>["variant"];
 
@@ -52,6 +56,22 @@ function getMetricVariant(value: number): BadgeVariant {
   return value > 0 ? "warning" : "outline";
 }
 
+function getScoreBadgeVariant(badge: ScoreBadge): BadgeVariant {
+  if (badge.tone === "success") {
+    return "success";
+  }
+
+  if (badge.tone === "warning") {
+    return "warning";
+  }
+
+  if (badge.tone === "secondary") {
+    return "secondary";
+  }
+
+  return "outline";
+}
+
 function formatScoreGapCount(count: number) {
   return `${count} ${count === 1 ? "score gap" : "score gaps"}`;
 }
@@ -88,6 +108,19 @@ export function ScoreEvaluationPanel({
             <div className="mt-1 text-xs text-muted-foreground">
               Evaluated {new Date(evaluation.evaluatedAt).toLocaleString()}
             </div>
+            {evaluation.badges.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {evaluation.badges.map((badge) => (
+                  <Badge
+                    key={badge.key}
+                    variant={getScoreBadgeVariant(badge)}
+                    title={badge.detail}
+                  >
+                    {badge.label}
+                  </Badge>
+                ))}
+              </div>
+            ) : null}
           </div>
           <div className="grid min-w-0 grid-cols-2 gap-2 text-sm sm:grid-cols-4">
             <ScoreMetric

@@ -300,7 +300,7 @@ describe("property scoring", () => {
     expect(evaluation.positiveFactors).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          ruleKey: "renovation.kitchen",
+          ruleKey: "renovation.condition_fit",
           result: "bonus"
         })
       ])
@@ -345,7 +345,7 @@ describe("property scoring", () => {
       () => "score-resale"
     );
 
-    expect(evaluation.categoryScores.resale).toBe(12);
+    expect(evaluation.categoryScores.resale).toBe(16);
     expect(evaluation.positiveFactors).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -360,6 +360,57 @@ describe("property scoring", () => {
           ruleKey: "resale.below_purchase_target",
           result: "bonus"
         })
+      ])
+    );
+  });
+
+  it("scores a waterfront turnkey value property as a strong candidate", () => {
+    const property = createPropertyRecord({
+      id: "property-waterfront-turnkey-value",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 399900,
+      livingSqft: 1576,
+      bedrooms: 4,
+      bathrooms: 2,
+      houseStyle: "Colonial",
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-setting",
+          factKey: "setting.lake_view",
+          label: "Lake View",
+          value: true
+        }),
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 0
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-08-10T22:14:30.000Z",
+      () => "score-waterfront-turnkey-value"
+    );
+
+    expect(evaluation.normalizedScore).toBeGreaterThanOrEqual(90);
+    expect(evaluation.categoryScores.renovation).toBe(10);
+    expect(evaluation.categoryScores.resale).toBeGreaterThanOrEqual(14);
+    expect(evaluation.badges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Water Setting" }),
+        expect.objectContaining({ label: "Value Candidate" }),
+        expect.objectContaining({ label: "Turnkey Candidate" })
       ])
     );
   });
@@ -384,7 +435,7 @@ describe("property scoring", () => {
         "Asking price or estimated purchase price is missing.",
         "Setting and view facts are missing.",
         "House style is missing.",
-        "Renovation scope is missing."
+        "Renovation condition is unknown."
       ])
     );
   });
