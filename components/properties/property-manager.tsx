@@ -82,7 +82,11 @@ import {
   loadScoreState,
   saveScoreState
 } from "@/lib/scoring/score-persistence";
-import type { ScoreEvaluation, ScoreEvaluationState } from "@/lib/scoring/types";
+import {
+  scoringEngineVersion,
+  type ScoreEvaluation,
+  type ScoreEvaluationState
+} from "@/lib/scoring/types";
 import { cn } from "@/lib/utils";
 
 type TabId =
@@ -1078,6 +1082,14 @@ export function PropertyManager() {
 
   const isDirty =
     propertyFingerprint(draft) !== propertyFingerprint(selectedProperty);
+  const needsScoreRefresh = Boolean(
+    draft &&
+      activeProfile &&
+      (!latestEvaluation ||
+        latestEvaluation.profileVersion !== activeProfile.version ||
+        latestEvaluation.scoringEngineVersion !== scoringEngineVersion)
+  );
+  const canSave = Boolean(draft && (isDirty || needsScoreRefresh));
 
   const propertyListResult = React.useMemo(
     () =>
@@ -1175,7 +1187,30 @@ export function PropertyManager() {
       return;
     }
 
-    persistState(upsertProperty(propertyState, draft), draft.id);
+    const nextPropertyState = upsertProperty(propertyState, draft);
+    const persistedState = savePropertyState(
+      window.localStorage,
+      nextPropertyState
+    );
+    const savedProperty =
+      persistedState.properties.find((property) => property.id === draft.id) ??
+      draft;
+
+    setPropertyState(persistedState);
+    setSelectedPropertyId(savedProperty.id);
+    setDraft(cloneProperty(savedProperty));
+    setLoadSource("storage");
+
+    if (activeProfile) {
+      const evaluation = evaluateProperty(savedProperty, activeProfile);
+      const nextScoreState = addScoreEvaluation(scoreState, evaluation);
+      const persistedScores = saveScoreState(window.localStorage, nextScoreState);
+
+      setScoreState(persistedScores);
+      setSaveStatus("Saved and scored");
+    } else {
+      setSaveStatus("Saved");
+    }
   }
 
   async function handleCopyBookmarklet() {
@@ -1298,22 +1333,6 @@ export function PropertyManager() {
         removedPhotoCount === 1 ? "" : "s"
       }`
     );
-  }
-
-  function handleEvaluate() {
-    if (!draft || !activeProfile) {
-      return;
-    }
-
-    const savedPropertyState = upsertProperty(propertyState, draft);
-    const evaluation = evaluateProperty(draft, activeProfile);
-    const nextScoreState = addScoreEvaluation(scoreState, evaluation);
-    const persistedScores = saveScoreState(window.localStorage, nextScoreState);
-
-    setScoreState(persistedScores);
-    persistState(savedPropertyState, draft.id);
-    setSaveStatus("Scored");
-    setActiveTab("scoring");
   }
 
   async function handleEnrichProperty() {
@@ -1623,7 +1642,9 @@ export function PropertyManager() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={isDirty ? "warning" : "success"}>{saveStatus}</Badge>
+          <Badge variant={isDirty || needsScoreRefresh ? "warning" : "success"}>
+            {needsScoreRefresh && !isDirty ? "Score refresh needed" : saveStatus}
+          </Badge>
           <Button type="button" variant="outline" onClick={handleResetAll}>
             <RotateCcw aria-hidden="true" />
             Reset
@@ -1632,7 +1653,7 @@ export function PropertyManager() {
             <Plus aria-hidden="true" />
             New
           </Button>
-          <Button type="button" onClick={handleSave} disabled={!draft || !isDirty}>
+          <Button type="button" onClick={handleSave} disabled={!canSave}>
             <Save aria-hidden="true" />
             Save
           </Button>
@@ -1858,15 +1879,6 @@ export function PropertyManager() {
                 </Button>
                 <Button
                   type="button"
-                  variant="outline"
-                  onClick={handleEvaluate}
-                  disabled={!draft || !activeProfile}
-                >
-                  <BarChart3 aria-hidden="true" />
-                  Evaluate
-                </Button>
-                <Button
-                  type="button"
                   variant="destructive"
                   onClick={handleDelete}
                   disabled={!draft}
@@ -1947,8 +1959,6 @@ export function PropertyManager() {
                   <ScoringTab
                     activeProfileName={activeProfile?.name ?? null}
                     evaluation={latestEvaluation}
-                    onEvaluate={handleEvaluate}
-                    canEvaluate={Boolean(activeProfile)}
                   />
                 ) : null}
               </>
@@ -3199,32 +3209,14 @@ function NotesTab({
 
 function ScoringTab({
   activeProfileName,
-  evaluation,
-  onEvaluate,
-  canEvaluate
+  evaluation
 }: {
   activeProfileName: string | null;
   evaluation: ScoreEvaluation | undefined;
-  onEvaluate: () => void;
-  canEvaluate: boolean;
 }) {
   return (
     <div className="grid gap-5">
-      <Section
-        title="Score Evaluation"
-        action={
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onEvaluate}
-            disabled={!canEvaluate}
-          >
-            <BarChart3 aria-hidden="true" />
-            Evaluate
-          </Button>
-        }
-      >
+      <Section title="Score Evaluation">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Badge variant="outline">
             {activeProfileName ?? "No active profile"}
