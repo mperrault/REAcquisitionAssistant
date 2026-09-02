@@ -414,6 +414,63 @@ describe("listing page enrichment", () => {
     }
   });
 
+  it("derives renovation scope facts from photo-inferred line items", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+
+    try {
+      const result = await enrichListingCandidate(
+        {
+          ...baseCandidate,
+          askingPrice: 300000,
+          inferRenovation: true
+        },
+        async (input) => {
+          if (input.includes("api.openai.com")) {
+            return createJsonResponse({
+              output_text: JSON.stringify({
+                scopeFacts: [],
+                lineItems: [
+                  {
+                    label: "Kitchen refresh",
+                    amount: 18000,
+                    confidence: 0.7,
+                    evidence: "Older cabinets and counters are visible."
+                  }
+                ],
+                expectedCost: 18000,
+                lowEstimate: 12000,
+                highEstimate: 26000
+              })
+            });
+          }
+
+          return createFetchResponse(`<html>
+            <head>
+              <meta property="og:image" content="https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg" />
+            </head>
+            <body>47 High St Stafford CT 06076 Detached home.</body>
+          </html>`);
+        }
+      );
+
+      expect(result.updates.renovationScopeFacts).toEqual([
+        {
+          factKey: "renovation.kitchen",
+          label: "Kitchen",
+          confidence: 0.7,
+          evidence: "Older cabinets and counters are visible."
+        }
+      ]);
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
   it("falls back to listing remarks for renovation scope when photos cannot be analyzed", async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;

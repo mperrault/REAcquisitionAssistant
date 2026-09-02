@@ -261,6 +261,109 @@ describe("property scoring", () => {
     );
   });
 
+  it("uses renovation line items as renovation fit signals", () => {
+    const property = createPropertyRecord({
+      id: "property-line-item-renovation-fit",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 250000,
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-kitchen-line-item",
+          factKey: "renovation.line_item.kitchen_refresh",
+          label: "Kitchen refresh",
+          value: 18000
+        }),
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 18000
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-08-10T22:13:00.000Z",
+      () => "score-line-item-renovation-fit"
+    );
+
+    expect(evaluation.categoryScores.renovation).toBeGreaterThan(0);
+    expect(evaluation.positiveFactors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "renovation.kitchen",
+          result: "bonus"
+        })
+      ])
+    );
+  });
+
+  it("awards resale points from derived property and setting signals", () => {
+    const property = createPropertyRecord({
+      id: "property-resale",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 289000,
+      bedrooms: 3,
+      bathrooms: 2,
+      lotAcres: 1.1,
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-setting",
+          factKey: "setting.lake_view",
+          label: "Lake View",
+          value: true
+        }),
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 45000
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-08-10T22:14:00.000Z",
+      () => "score-resale"
+    );
+
+    expect(evaluation.categoryScores.resale).toBe(12);
+    expect(evaluation.positiveFactors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "resale.strong_setting",
+          result: "bonus"
+        }),
+        expect.objectContaining({
+          ruleKey: "resale.desirable_town",
+          result: "bonus"
+        }),
+        expect.objectContaining({
+          ruleKey: "resale.below_purchase_target",
+          result: "bonus"
+        })
+      ])
+    );
+  });
+
   it("records missing data warnings for incomplete records", () => {
     const property = createPropertyRecord({
       id: "property-4"

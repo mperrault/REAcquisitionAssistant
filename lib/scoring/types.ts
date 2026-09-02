@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { profileCategorySchema } from "@/lib/profiles/types";
 
-export const scoringEngineVersion = "0.1.0";
+export const scoringEngineVersion = "0.2.0";
 
 export const ruleResultSchema = z.object({
   ruleKey: z.string().min(1),

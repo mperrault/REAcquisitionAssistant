@@ -215,20 +215,61 @@ function normalizeActiveProfile(state: ProfileState): ProfileState {
 function reconcileSeedProfiles(state: ProfileState): ProfileState {
   const existingProfileIds = new Set(state.profiles.map((profile) => profile.id));
   let renamedSeedProfile = false;
+  let updatedSeedProfilePreferences = false;
   const reconciledProfiles = state.profiles.map((profile) => {
+    const seedProfile = quietCornerSeedProfiles.find(
+      (candidate) => candidate.id === profile.id
+    );
+    let nextProfile = profile;
+
     if (
       profile.id === quietCornerSeedProfile.id &&
       profile.name === "Quiet Corner Second Home"
     ) {
       renamedSeedProfile = true;
 
-      return {
+      nextProfile = {
         ...profile,
         name: quietCornerSeedProfile.name
       };
     }
 
-    return profile;
+    if (!seedProfile) {
+      return nextProfile;
+    }
+
+    const existingFeatureKeys = new Set(
+      nextProfile.featurePreferences.map((preference) => preference.featureKey)
+    );
+    const missingFeaturePreferences = seedProfile.featurePreferences.filter(
+      (preference) => !existingFeatureKeys.has(preference.featureKey)
+    );
+    const existingCategoryKeys = new Set(
+      nextProfile.categoryWeights.map((weight) => weight.categoryKey)
+    );
+    const missingCategoryWeights = seedProfile.categoryWeights.filter(
+      (weight) => !existingCategoryKeys.has(weight.categoryKey)
+    );
+
+    if (
+      missingFeaturePreferences.length === 0 &&
+      missingCategoryWeights.length === 0
+    ) {
+      return nextProfile;
+    }
+
+    updatedSeedProfilePreferences = true;
+
+    return {
+      ...nextProfile,
+      featurePreferences: [
+        ...nextProfile.featurePreferences,
+        ...missingFeaturePreferences
+      ],
+      categoryWeights: [...nextProfile.categoryWeights, ...missingCategoryWeights],
+      version: nextProfile.version + 1,
+      updatedAt: nowIso()
+    };
   });
   const missingSeedProfiles = quietCornerSeedProfiles
     .filter((profile) => !existingProfileIds.has(profile.id))
@@ -237,7 +278,11 @@ function reconcileSeedProfiles(state: ProfileState): ProfileState {
       isActive: false
     }));
 
-  if (missingSeedProfiles.length === 0 && !renamedSeedProfile) {
+  if (
+    missingSeedProfiles.length === 0 &&
+    !renamedSeedProfile &&
+    !updatedSeedProfilePreferences
+  ) {
     return state;
   }
 

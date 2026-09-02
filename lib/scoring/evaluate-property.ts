@@ -82,11 +82,89 @@ function asString(value: FactValue | undefined) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function createFactIndex(property: PropertyRecord): FactIndex {
+const renovationScopeFromText = [
+  {
+    factKey: "renovation.kitchen",
+    pattern: /\bkitchen|cabinet|countertop|backsplash\b/i
+  },
+  {
+    factKey: "renovation.bathrooms",
+    pattern: /\bbath(?:room)?|shower|tub|vanity|toilet\b/i
+  },
+  {
+    factKey: "renovation.flooring",
+    pattern: /\bfloor|flooring|carpet|hardwood|vinyl|tile\b/i
+  },
+  {
+    factKey: "renovation.paint",
+    pattern: /\bpaint|wallpaper|interior refresh\b/i
+  },
+  {
+    factKey: "renovation.lighting",
+    pattern: /\blight|lighting|fixture\b/i
+  },
+  {
+    factKey: "renovation.landscaping",
+    pattern: /\blandscap|yard|grounds?|brush|tree\b/i
+  },
+  {
+    factKey: "renovation.windows",
+    pattern: /\bwindow\b/i
+  },
+  {
+    factKey: "renovation.siding",
+    pattern: /\bsiding|exterior paint|clapboard\b/i
+  },
+  {
+    factKey: "renovation.deck_porch",
+    pattern: /\bdeck|porch|stairs?|railing\b/i
+  },
+  {
+    factKey: "renovation.minor_layout",
+    pattern: /\blayout|partition|opening|wall removal\b/i
+  }
+] as const;
+
+const strongResaleSettingKeys = [
+  "setting.country_mountain_view",
+  "setting.open_fields_pastoral",
+  "setting.horse_property",
+  "setting.small_farm",
+  "setting.river_frontage",
+  "setting.lake_view",
+  "setting.pond_view",
+  "setting.lake_frontage",
+  "setting.pond_frontage",
+  "setting.woods_privacy"
+];
+
+function inferRenovationScopeFactKey(factKey: string, label: string) {
+  if (!factKey.startsWith("renovation.line_item.")) {
+    return null;
+  }
+
+  const searchText = `${factKey} ${label}`;
+
+  return (
+    renovationScopeFromText.find((scope) => scope.pattern.test(searchText))
+      ?.factKey ?? null
+  );
+}
+
+function createFactIndex(property: PropertyRecord, profile: SearchProfile): FactIndex {
   const facts = new Map<string, FactValue>();
 
   for (const fact of property.facts) {
     facts.set(fact.factKey, fact.value);
+
+    const derivedRenovationScope = inferRenovationScopeFactKey(
+      fact.factKey,
+      fact.label
+    );
+
+    if (derivedRenovationScope && !facts.has(derivedRenovationScope)) {
+      facts.set(derivedRenovationScope, true);
+    }
   }
 
   function setDerivedFact(key: string, value: FactValue) {
@@ -137,6 +215,43 @@ function createFactIndex(property: PropertyRecord): FactIndex {
     setDerivedFact(`utility.${sewerType}`, true);
     setDerivedFact("utility.septic", sewerType.includes("septic"));
   }
+
+  if (property.bedrooms !== null) {
+    setDerivedFact("resale.three_plus_bedrooms", property.bedrooms >= 3);
+  }
+
+  if (property.bathrooms !== null) {
+    setDerivedFact("resale.two_plus_baths", property.bathrooms >= 2);
+  }
+
+  if (property.lotAcres !== null) {
+    setDerivedFact("resale.usable_acreage", property.lotAcres >= 0.75);
+  }
+
+  const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+
+  if (basePrice !== null && profile.budget.purchasePriceTarget !== null) {
+    setDerivedFact(
+      "resale.below_purchase_target",
+      basePrice <= profile.budget.purchasePriceTarget
+    );
+  }
+
+  const townPreference = profile.townPreferences.find(
+    (preference) =>
+      preference.enabled &&
+      preference.tier <= 2 &&
+      matchesTownPreference(preference, property.city, property.state)
+  );
+
+  if (property.city && property.state) {
+    setDerivedFact("resale.desirable_town", Boolean(townPreference));
+  }
+
+  setDerivedFact(
+    "resale.strong_setting",
+    strongResaleSettingKeys.some((key) => isTruthyFact(facts.get(key) ?? null))
+  );
 
   return facts;
 }
@@ -524,7 +639,7 @@ export function evaluateProperty(
   evaluatedAt = nowIso(),
   createId = createEvaluationId
 ): ScoreEvaluation {
-  const facts = createFactIndex(property);
+  const facts = createFactIndex(property, profile);
   const positiveFactors: RuleResult[] = [];
   const penalties: RuleResult[] = [];
   const hardRejectReasons: RuleResult[] = [];

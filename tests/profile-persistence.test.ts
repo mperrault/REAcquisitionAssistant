@@ -116,6 +116,49 @@ describe("profile persistence", () => {
     });
   });
 
+  it("adds missing seed preferences to stored seed profiles", () => {
+    const storage = new MemoryStorage();
+    const oldSeed = cloneProfile(firstProfile(createDefaultProfileState()));
+    const storedProfile = {
+      ...oldSeed,
+      budget: {
+        ...oldSeed.budget,
+        totalProjectBudgetTarget: 425000
+      },
+      featurePreferences: oldSeed.featurePreferences.filter(
+        (preference) => !preference.featureKey.startsWith("resale.")
+      )
+    };
+
+    storage.setItem(
+      PROFILE_STORAGE_KEY,
+      JSON.stringify({
+        schemaVersion: 1,
+        activeProfileId: storedProfile.id,
+        profiles: [storedProfile]
+      })
+    );
+
+    const result = loadProfileState(storage);
+    const profile = firstProfile(result.state);
+
+    expect(result.source).toBe("storage");
+    expect(profile.budget.totalProjectBudgetTarget).toBe(425000);
+    expect(profile.version).toBe(storedProfile.version + 1);
+    expect(profile.featurePreferences).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          featureKey: "resale.strong_setting",
+          category: "resale"
+        }),
+        expect.objectContaining({
+          featureKey: "resale.desirable_town",
+          category: "resale"
+        })
+      ])
+    );
+  });
+
   it("persists edits across every seeded preference area", () => {
     const storage = new MemoryStorage();
     const state = createDefaultProfileState();

@@ -674,6 +674,77 @@ function slugFromLabel(value: string) {
   return slug || "misc";
 }
 
+const renovationScopeTextPatterns = [
+  {
+    factKey: "renovation.kitchen",
+    pattern: /\bkitchen|cabinet|countertop|backsplash\b/i
+  },
+  {
+    factKey: "renovation.bathrooms",
+    pattern: /\bbath(?:room)?|shower|tub|vanity|toilet\b/i
+  },
+  {
+    factKey: "renovation.flooring",
+    pattern: /\bfloor|flooring|carpet|hardwood|vinyl|tile\b/i
+  },
+  {
+    factKey: "renovation.paint",
+    pattern: /\bpaint|wallpaper|interior refresh\b/i
+  },
+  {
+    factKey: "renovation.lighting",
+    pattern: /\blight|lighting|fixture\b/i
+  },
+  {
+    factKey: "renovation.landscaping",
+    pattern: /\blandscap|yard|grounds?|brush|tree\b/i
+  },
+  {
+    factKey: "renovation.windows",
+    pattern: /\bwindow\b/i
+  },
+  {
+    factKey: "renovation.siding",
+    pattern: /\bsiding|exterior paint|clapboard\b/i
+  },
+  {
+    factKey: "renovation.deck_porch",
+    pattern: /\bdeck|porch|stairs?|railing\b/i
+  },
+  {
+    factKey: "renovation.minor_layout",
+    pattern: /\blayout|partition|opening|wall removal\b/i
+  }
+] as const;
+
+function inferRenovationScopeFromLineItem(
+  lineItem: z.infer<typeof renovationLineItemSchema>
+) {
+  const searchText = `${lineItem.factKey} ${lineItem.label} ${lineItem.evidence}`;
+  const match = renovationScopeTextPatterns.find((item) =>
+    item.pattern.test(searchText)
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const definition = renovationScopeDefinitions.find(
+    (item) => item.factKey === match.factKey
+  );
+
+  if (!definition) {
+    return null;
+  }
+
+  return {
+    factKey: definition.factKey,
+    label: definition.label,
+    confidence: lineItem.confidence,
+    evidence: lineItem.evidence
+  };
+}
+
 function parseVisionRenovationInference(text: string): RenovationInference | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -750,6 +821,15 @@ function parseVisionRenovationInference(text: string): RenovationInference | nul
         }
       ];
     });
+    const derivedScopeFacts = lineItems
+      .flatMap((lineItem) => {
+        const derivedScope = inferRenovationScopeFromLineItem(lineItem);
+
+        return derivedScope ? [derivedScope] : [];
+      })
+      .filter(
+        (fact) => !scopeFacts.some((item) => item.factKey === fact.factKey)
+      );
     const expectedCost =
       parseCost(parsed.expectedCost) ??
       (lineItems.length > 0
@@ -763,7 +843,7 @@ function parseVisionRenovationInference(text: string): RenovationInference | nul
     }
 
     return {
-      scopeFacts,
+      scopeFacts: [...scopeFacts, ...derivedScopeFacts],
       lineItems,
       expectedCost,
       lowEstimate,

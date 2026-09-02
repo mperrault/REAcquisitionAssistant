@@ -120,7 +120,7 @@ export function ScoreEvaluationPanel({
         </div>
       </div>
 
-      <CategoryScores scores={evaluation.categoryScores} />
+      <CategoryScores evaluation={evaluation} />
 
       <ResultSection
         title="Hard Rejections"
@@ -168,9 +168,9 @@ function ScoreMetric({
 }
 
 function CategoryScores({
-  scores
+  evaluation
 }: {
-  scores: ScoreEvaluation["categoryScores"];
+  evaluation: ScoreEvaluation;
 }) {
   return (
     <div className="rounded-md border border-border bg-background">
@@ -178,22 +178,77 @@ function CategoryScores({
         Category Scores
       </div>
       <div className="grid gap-2 p-4 sm:grid-cols-2 lg:grid-cols-3">
-        {Object.entries(scores).map(([category, points]) => (
+        {Object.entries(evaluation.categoryScores).map(([category, points]) => (
           <div
             key={category}
-            className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2"
+            className="grid gap-2 rounded-md border border-border bg-card px-3 py-2"
           >
-            <span className="truncate text-sm text-muted-foreground">
-              {formatCategoryLabel(category)}
-            </span>
-            <span className="shrink-0 text-sm font-semibold">
-              {formatPoints(points)}
-            </span>
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-sm text-muted-foreground">
+                {formatCategoryLabel(category)}
+              </span>
+              <span className="shrink-0 text-sm font-semibold">
+                {formatPoints(points)}
+              </span>
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {getCategoryScoreDetail(evaluation, category, points)}
+            </div>
           </div>
         ))}
       </div>
     </div>
   );
+}
+
+function getCategoryScoreDetail(
+  evaluation: ScoreEvaluation,
+  category: string,
+  points: number
+) {
+  const categoryFactors = [
+    ...evaluation.positiveFactors,
+    ...evaluation.penalties,
+    ...evaluation.hardRejectReasons
+  ].filter((item) => item.category === category);
+
+  if (categoryFactors.length > 0) {
+    const labels = categoryFactors
+      .slice(0, 2)
+      .map((item) => item.label)
+      .join(", ");
+
+    return `${categoryFactors.length} matched: ${labels}`;
+  }
+
+  const categoryGap = getCategoryGap(evaluation.missingData, category);
+
+  if (categoryGap) {
+    return categoryGap;
+  }
+
+  if (points === 0) {
+    return `No matching ${formatCategoryLabel(category).toLowerCase()} facts scored.`;
+  }
+
+  return "Score came from derived category rules.";
+}
+
+function getCategoryGap(missingData: string[], category: string) {
+  const patterns: Record<string, RegExp> = {
+    location: /town|state|drive time|commute/i,
+    setting: /setting|view|acreage|lot acreage/i,
+    style: /style/i,
+    renovation: /renovation/i,
+    financial: /asking price|purchase price|investment|financial/i,
+    resale: /resale/i,
+    maintenance: /maintenance/i,
+    risk: /risk/i,
+    utility: /utility/i
+  };
+  const pattern = patterns[category];
+
+  return pattern ? missingData.find((item) => pattern.test(item)) : undefined;
 }
 
 function ResultSection({

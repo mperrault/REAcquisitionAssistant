@@ -116,6 +116,15 @@ const renovationScope = [
   ]
 ] as const;
 
+const resalePreferences = [
+  ["resale.strong_setting", "Strong scarce setting", 1, 4],
+  ["resale.desirable_town", "Desirable Quiet Corner town", 2, 3],
+  ["resale.below_purchase_target", "Below purchase target", 3, 2],
+  ["resale.three_plus_bedrooms", "3+ bedrooms", 4, 1],
+  ["resale.two_plus_baths", "2+ baths", 5, 1],
+  ["resale.usable_acreage", "Usable acreage", 6, 1]
+] as const;
+
 const turnkeyRenovationScope = [
   ["renovation.paint", "Paint", "bonus", 2],
   ["renovation.flooring", "Flooring", "bonus", 1],
@@ -249,6 +258,18 @@ export const quietCornerSeedProfile: SearchProfile = {
         mode: mode as PreferenceMode,
         enabled: true
       })
+    ),
+    ...resalePreferences.map(
+      ([featureKey, featureLabel, rank, weight]): FeaturePreference => ({
+        id: `feature-${idFrom(featureKey)}`,
+        featureKey,
+        featureLabel,
+        category: "resale",
+        rank,
+        weight,
+        mode: "bonus",
+        enabled: true
+      })
     )
   ],
   categoryWeights: (
@@ -306,7 +327,9 @@ export const quietCornerTurnkeySeedProfile: SearchProfile = {
   renovationTolerance: "turnkey_minimal_refresh",
   featurePreferences: [
     ...quietCornerSeedProfile.featurePreferences.filter(
-      (preference) => preference.category !== "renovation"
+      (preference) =>
+        preference.category !== "renovation" &&
+        preference.category !== "resale"
     ),
     ...turnkeyRenovationScope.map(
       ([featureKey, featureLabel, mode, weight], index): FeaturePreference => ({
@@ -317,6 +340,18 @@ export const quietCornerTurnkeySeedProfile: SearchProfile = {
         rank: index + 1,
         weight,
         mode: mode as PreferenceMode,
+        enabled: true
+      })
+    ),
+    ...resalePreferences.map(
+      ([featureKey, featureLabel, rank, weight]): FeaturePreference => ({
+        id: `feature-${idFrom(featureKey)}`,
+        featureKey,
+        featureLabel,
+        category: "resale",
+        rank,
+        weight,
+        mode: "bonus",
         enabled: true
       })
     )
