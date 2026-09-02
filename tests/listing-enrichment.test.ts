@@ -61,6 +61,37 @@ describe("listing page enrichment", () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it("emits diagnostics through a callback during enrichment", async () => {
+    const streamedStages: string[] = [];
+    const result = await enrichListingCandidate(
+      baseCandidate,
+      async () =>
+        createFetchResponse(`<html>
+          <head>
+            <script type="application/ld+json">
+              {
+                "@type": "SingleFamilyResidence",
+                "address": "47 High St, Stafford, CT 06076",
+                "offers": { "price": "315000" }
+              }
+            </script>
+          </head>
+          <body>47 High St Stafford CT 06076</body>
+        </html>`),
+      {
+        onDiagnostic(diagnostic) {
+          streamedStages.push(diagnostic.stage);
+        }
+      }
+    );
+
+    expect(streamedStages).toContain("start");
+    expect(streamedStages).toContain("listing fetch");
+    expect(streamedStages).toEqual(
+      result.diagnostics.map((diagnostic) => diagnostic.stage)
+    );
+  });
+
   it("does not return updates when fetched page belongs to another address", async () => {
     const result = await enrichListingCandidate(baseCandidate, async () =>
       createFetchResponse(`<html>

@@ -34,7 +34,10 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { calculateDriveTimeResponseSchema } from "@/lib/commute/drive-time";
-import { listingCandidateEnrichmentResponseSchema } from "@/lib/listing-alerts/listing-enrichment";
+import {
+  listingCandidateEnrichmentResponseSchema,
+  type ListingCandidateEnrichmentResponse
+} from "@/lib/listing-alerts/listing-enrichment";
 import {
   type BrowserCaptureRecord,
   browserCaptureListResponseSchema
@@ -70,6 +73,7 @@ import {
   type PropertyState,
   lifecycleStatusOptions,
   listingStatusOptions,
+  propertyEnrichmentDiagnosticSchema,
   propertyFactSourceOptions
 } from "@/lib/properties/types";
 import { loadProfileState } from "@/lib/profiles/profile-persistence";
@@ -115,6 +119,20 @@ const tabs: Array<{
 ];
 
 const noPreferredSettingMatchFactKey = "setting.no_preferred_match";
+
+type EnrichmentStreamEvent =
+  | {
+      type: "diagnostic";
+      diagnostic: unknown;
+    }
+  | {
+      type: "result";
+      result: ListingCandidateEnrichmentResponse;
+    }
+  | {
+      type: "error";
+      error: string;
+    };
 
 const propertyScoreFilterOptions: Array<{
   value: PropertyScoreFilter;
@@ -260,6 +278,48 @@ function createPhotoEvidenceFromCapture(
       : `Captured photo ${index + 1}`,
     capturedAt: capture.capturedAt
   };
+}
+
+async function readNdjsonStream<T>({
+  response,
+  onEvent
+}: {
+  response: Response;
+  onEvent: (event: T) => void;
+}) {
+  if (!response.body) {
+    throw new Error("Streaming response body was not available.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+
+      if (trimmedLine) {
+        onEvent(JSON.parse(trimmedLine) as T);
+      }
+    }
+  }
+
+  buffer += decoder.decode();
+
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer.trim()) as T);
+  }
 }
 
 function createSourceCaptureSummary(
@@ -1350,22 +1410,50 @@ export function PropertyManager() {
       return;
     }
 
+    const propertyDraft = draft;
+    let diagnostics: PropertyEnrichmentDiagnostic[] = [
+      createPropertyDiagnostic(
+        "client",
+        "started",
+        "Requesting listing enrichment.",
+        propertyDraft.listingUrl
+      )
+    ];
+    const appendDiagnostic = (diagnostic: PropertyEnrichmentDiagnostic) => {
+      diagnostics = [...diagnostics, diagnostic].slice(-80);
+      setDraft((currentDraft) =>
+        currentDraft?.id === propertyDraft.id
+          ? {
+              ...currentDraft,
+              enrichmentDiagnostics: diagnostics
+            }
+          : currentDraft
+      );
+      setSaveStatus(diagnostic.message);
+    };
+
     setIsEnrichingProperty(true);
     setSaveStatus("Enriching");
+    setActiveTab("diagnostics");
+    setDraft({
+      ...propertyDraft,
+      enrichmentDiagnostics: diagnostics
+    });
 
     try {
-      const response = await fetch("/api/listing-alerts/enrich-listing", {
+      const response = await fetch("/api/listing-alerts/enrich-listing?stream=1", {
         method: "POST",
         headers: {
+          Accept: "application/x-ndjson",
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          candidate: createPropertyEnrichmentCandidate(draft)
+          candidate: createPropertyEnrichmentCandidate(propertyDraft)
         })
       });
-      const payload = await response.json();
 
       if (!response.ok) {
+        const payload = await response.json().catch(() => null);
         const message =
           payload && typeof payload.error === "string"
             ? payload.error
@@ -1373,17 +1461,44 @@ export function PropertyManager() {
         throw new Error(message);
       }
 
-      const enrichment = listingCandidateEnrichmentResponseSchema.parse(payload);
-      const merged = mergeEnrichmentIntoProperty(draft, enrichment);
+      const enrichmentResults: ListingCandidateEnrichmentResponse[] = [];
+
+      await readNdjsonStream<EnrichmentStreamEvent>({
+        response,
+        onEvent(event) {
+          if (event.type === "diagnostic") {
+            appendDiagnostic(
+              propertyEnrichmentDiagnosticSchema.parse(event.diagnostic)
+            );
+            return;
+          }
+
+          if (event.type === "result") {
+            enrichmentResults.push(
+              listingCandidateEnrichmentResponseSchema.parse(event.result)
+            );
+            return;
+          }
+
+          if (event.type === "error") {
+            throw new Error(event.error);
+          }
+        }
+      });
+
+      const enrichment = enrichmentResults[0];
+
+      if (!enrichment) {
+        throw new Error("Listing enrichment did not return a result.");
+      }
+
+      const merged = mergeEnrichmentIntoProperty(propertyDraft, enrichment);
       let enrichedProperty = merged.property;
       const appliedFields = [...merged.appliedFields];
       const warnings = [...enrichment.warnings];
-      const diagnostics: PropertyEnrichmentDiagnostic[] = [
-        ...enrichment.diagnostics
-      ];
 
       if (activeProfile && canCalculateDriveTime(enrichedProperty, activeProfile)) {
-        diagnostics.push(
+        appendDiagnostic(
           createPropertyDiagnostic(
             "drive time",
             "started",
@@ -1417,7 +1532,7 @@ export function PropertyManager() {
 
           if (driveTime.driveTimeMinutes !== null) {
             appliedFields.push("drive time");
-            diagnostics.push(
+            appendDiagnostic(
               createPropertyDiagnostic(
                 "drive time",
                 "success",
@@ -1428,7 +1543,7 @@ export function PropertyManager() {
               )
             );
           } else {
-            diagnostics.push(
+            appendDiagnostic(
               createPropertyDiagnostic(
                 "drive time",
                 "warning",
@@ -1444,7 +1559,7 @@ export function PropertyManager() {
           typeof driveTimePayload.error === "string"
         ) {
           warnings.push(driveTimePayload.error);
-          diagnostics.push(
+          appendDiagnostic(
             createPropertyDiagnostic(
               "drive time",
               "failed",
@@ -1454,7 +1569,7 @@ export function PropertyManager() {
           );
         }
       } else if (activeProfile) {
-        diagnostics.push(
+        appendDiagnostic(
           createPropertyDiagnostic(
             "drive time",
             "skipped",
@@ -1465,7 +1580,7 @@ export function PropertyManager() {
           )
         );
       } else {
-        diagnostics.push(
+        appendDiagnostic(
           createPropertyDiagnostic(
             "drive time",
             "skipped",
@@ -1475,6 +1590,55 @@ export function PropertyManager() {
         );
       }
 
+      if (activeProfile) {
+        appendDiagnostic(
+          createPropertyDiagnostic(
+            "scoring",
+            "started",
+            "Calculating score.",
+            `Profile: ${activeProfile.name}`
+          )
+        );
+      }
+
+      if (activeProfile) {
+        const evaluation = evaluateProperty(enrichedProperty, activeProfile);
+        const nextScoreState = addScoreEvaluation(scoreState, evaluation);
+        const persistedScores = saveScoreState(
+          window.localStorage,
+          nextScoreState
+        );
+
+        setScoreState(persistedScores);
+        appendDiagnostic(
+          createPropertyDiagnostic(
+            "scoring",
+            "success",
+            "Score calculated.",
+            `${evaluation.scoreLabel}: ${evaluation.normalizedScore}/100`
+          )
+        );
+      }
+
+      const warningSuffix =
+        warnings.length > 0
+          ? ` (${warnings.length} warning${
+              warnings.length === 1 ? "" : "s"
+            })`
+          : "";
+
+      appendDiagnostic(
+        createPropertyDiagnostic(
+          "save",
+          "success",
+          appliedFields.length > 0
+            ? `Enriched ${Array.from(new Set(appliedFields)).join(", ")}${warningSuffix}`
+            : `No new data${warningSuffix}`,
+          activeProfile
+            ? "Property and score updates were saved locally."
+            : "Property updates were saved locally."
+        )
+      );
       enrichedProperty = {
         ...enrichedProperty,
         enrichmentDiagnostics: diagnostics.slice(-80)
@@ -1489,33 +1653,14 @@ export function PropertyManager() {
       setDraft(cloneProperty(enrichedProperty));
       setSelectedPropertyId(enrichedProperty.id);
       setLoadSource("storage");
-
-      if (activeProfile) {
-        const evaluation = evaluateProperty(enrichedProperty, activeProfile);
-        const nextScoreState = addScoreEvaluation(scoreState, evaluation);
-        const persistedScores = saveScoreState(
-          window.localStorage,
-          nextScoreState
-        );
-
-        setScoreState(persistedScores);
-        setActiveTab("scoring");
-      }
-
-      const warningSuffix =
-        warnings.length > 0
-          ? ` (${warnings.length} warning${
-              warnings.length === 1 ? "" : "s"
-            })`
-          : "";
-
-      setSaveStatus(
-        appliedFields.length > 0
-          ? `Enriched ${Array.from(new Set(appliedFields)).join(", ")}${warningSuffix}`
-          : `No new data${warningSuffix}`
-      );
     } catch (error) {
-      setSaveStatus(error instanceof Error ? error.message : "Enrich failed");
+      appendDiagnostic(
+        createPropertyDiagnostic(
+          "client",
+          "failed",
+          error instanceof Error ? error.message : "Enrich failed"
+        )
+      );
     } finally {
       setIsEnrichingProperty(false);
     }

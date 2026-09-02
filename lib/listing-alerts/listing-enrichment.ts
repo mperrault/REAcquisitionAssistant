@@ -142,6 +142,12 @@ function addSettingCoverageFact(
 type EnrichmentDiagnostic = z.infer<typeof enrichmentDiagnosticSchema>;
 type EnrichmentDiagnosticStatus = EnrichmentDiagnostic["status"];
 
+export type ListingEnrichmentDiagnostic = EnrichmentDiagnostic;
+
+type EnrichmentOptions = {
+  onDiagnostic?: (diagnostic: EnrichmentDiagnostic) => void;
+};
+
 const styleDefinitions = [
   {
     houseStyle: "Cape",
@@ -277,7 +283,10 @@ function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function createDiagnosticRecorder(fetchedAt: string) {
+function createDiagnosticRecorder(
+  fetchedAt: string,
+  onDiagnostic?: (diagnostic: EnrichmentDiagnostic) => void
+) {
   const diagnostics: EnrichmentDiagnostic[] = [];
 
   return {
@@ -288,14 +297,17 @@ function createDiagnosticRecorder(fetchedAt: string) {
       message: string,
       detail = ""
     ) {
-      diagnostics.push({
+      const diagnostic = {
         id: `${diagnostics.length + 1}`,
         at: fetchedAt,
         stage,
         status,
         message,
         detail
-      });
+      };
+
+      diagnostics.push(diagnostic);
+      onDiagnostic?.(diagnostic);
     }
   };
 }
@@ -1606,12 +1618,16 @@ export async function enrichListingCandidate(
         "houseStyle" | "listingRemarks" | "inferStyle" | "inferRenovation"
       >
     >,
-  fetcher: FetchLike = fetch
+  fetcher: FetchLike = fetch,
+  options: EnrichmentOptions = {}
 ): Promise<ListingCandidateEnrichmentResponse> {
   const parsedCandidate = requestCandidateSchema.parse(candidate);
   const listingUrl = validateFetchUrl(parsedCandidate.listingUrl);
   const fetchedAt = new Date().toISOString();
-  const diagnosticRecorder = createDiagnosticRecorder(fetchedAt);
+  const diagnosticRecorder = createDiagnosticRecorder(
+    fetchedAt,
+    options.onDiagnostic
+  );
   const { diagnostics } = diagnosticRecorder;
   const addDiagnostic = diagnosticRecorder.add;
   const warnings: string[] = [];
