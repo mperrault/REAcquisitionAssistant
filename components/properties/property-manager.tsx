@@ -221,6 +221,66 @@ function formatAddress(property: PropertyRecord) {
   return line || "Untitled property";
 }
 
+function cleanActionUrl(value: string) {
+  return value
+    .trim()
+    .replace(/&amp;/g, "&")
+    .replace(/(?:\]|\|)(?=https?:\/\/).*$/i, "")
+    .replace(/[\]),.;]+$/g, "");
+}
+
+function isLikelyImageActionUrl(value: string) {
+  try {
+    const parsedUrl = new URL(value);
+    return /\.(?:jpe?g|png|webp)$/i.test(parsedUrl.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function extractActionUrls(value: string) {
+  const separatedValue = value
+    .replace(/\](https?:\/\/)/gi, "] $1")
+    .replace(/\|(https?:\/\/)/gi, " $1");
+  const matches = separatedValue.match(/https?:\/\/[^\s<>"')\]|]+/gi) ?? [];
+
+  return Array.from(new Set(matches.map(cleanActionUrl).filter(Boolean)));
+}
+
+function getSourceWebsiteLabel(url: string) {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+
+    if (hostname.includes("zillow")) {
+      return "Zillow";
+    }
+
+    if (hostname.includes("realtor")) {
+      return "Realtor";
+    }
+
+    return hostname;
+  } catch {
+    return "Source";
+  }
+}
+
+function getPropertySourceListingUrl(property: PropertyRecord) {
+  const listingUrl = extractActionUrls(property.listingUrl).find(
+    (url) => !isLikelyImageActionUrl(url)
+  );
+
+  if (listingUrl) {
+    return listingUrl;
+  }
+
+  return (
+    property.sourceCaptures
+      .map((capture) => cleanActionUrl(capture.pageUrl))
+      .find((url) => url && !isLikelyImageActionUrl(url)) ?? ""
+  );
+}
+
 function formatEvaluationDateTime(value: string) {
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
@@ -2440,6 +2500,10 @@ function SourcesTab({
   onAttachCapture: (captureId: string) => void;
 }) {
   const bookmarkletCode = React.useMemo(createBrowserCaptureBookmarklet, []);
+  const sourceListingUrl = getPropertySourceListingUrl(draft);
+  const sourceWebsiteLabel = sourceListingUrl
+    ? getSourceWebsiteLabel(sourceListingUrl)
+    : "Source";
   const sortedCaptures = React.useMemo(
     () =>
       [...browserCaptures].sort((a, b) => {
@@ -2456,6 +2520,54 @@ function SourcesTab({
 
   return (
     <div className="grid gap-5">
+      <Section
+        title="Source Listing"
+        action={
+          sourceListingUrl ? (
+            <Button type="button" variant="outline" size="sm" asChild>
+              <a
+                href={sourceListingUrl}
+                target="_blank"
+                rel="noreferrer"
+                title={`Open ${sourceWebsiteLabel} listing in a new tab`}
+              >
+                <LinkIcon aria-hidden="true" />
+                Open {sourceWebsiteLabel}
+              </a>
+            </Button>
+          ) : null
+        }
+      >
+        {sourceListingUrl ? (
+          <div className="grid gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{sourceWebsiteLabel}</Badge>
+              <a
+                href={sourceListingUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm font-medium text-primary hover:underline"
+                title={`Open ${sourceWebsiteLabel} listing in a new tab`}
+              >
+                {formatAddress(draft)}
+              </a>
+            </div>
+            <a
+              href={sourceListingUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="block truncate text-xs text-muted-foreground hover:text-primary hover:underline"
+            >
+              {sourceListingUrl}
+            </a>
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+            No Zillow or Realtor listing URL is saved for this property.
+          </div>
+        )}
+      </Section>
+
       <Section
         title="Browser Capture"
         action={
