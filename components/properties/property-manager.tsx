@@ -114,6 +114,8 @@ const tabs: Array<{
   { id: "scoring", label: "Scoring", icon: BarChart3 }
 ];
 
+const noPreferredSettingMatchFactKey = "setting.no_preferred_match";
+
 const propertyScoreFilterOptions: Array<{
   value: PropertyScoreFilter;
   label: string;
@@ -588,6 +590,7 @@ function mergeEnrichmentIntoProperty(
   const settingInferenceReference = "Listing setting inference";
   let renovationFacts = facts;
   let appliedSettingFacts = 0;
+  let appliedSettingCoverageFacts = 0;
   let appliedRenovationScopes = 0;
   let appliedRenovationLineItems = 0;
   let appliedRenovationEstimates = 0;
@@ -606,7 +609,12 @@ function mergeEnrichmentIntoProperty(
       enrichment.fetchedAt
     );
 
-    if (renovationFacts !== beforeFacts) {
+    if (
+      renovationFacts !== beforeFacts &&
+      settingFact.factKey === noPreferredSettingMatchFactKey
+    ) {
+      appliedSettingCoverageFacts += 1;
+    } else if (renovationFacts !== beforeFacts) {
       appliedSettingFacts += 1;
     }
   }
@@ -692,7 +700,8 @@ function mergeEnrichmentIntoProperty(
     appliedRenovationScopes > 0 ||
     appliedRenovationLineItems > 0 ||
     appliedRenovationEstimates > 0;
-  const didApplySetting = appliedSettingFacts > 0;
+  const didApplySetting =
+    appliedSettingFacts > 0 || appliedSettingCoverageFacts > 0;
   const changed =
     shouldApplyPrice ||
     shouldApplyPhoto ||
@@ -720,6 +729,7 @@ function mergeEnrichmentIntoProperty(
       shouldApplyPhoto ? "photo" : null,
       shouldApplyStyle ? "style" : null,
       appliedSettingFacts > 0 ? "setting/view facts" : null,
+      appliedSettingCoverageFacts > 0 ? "setting reviewed" : null,
       appliedRenovationScopes > 0 ? "renovation scope" : null,
       appliedRenovationLineItems > 0 ? "renovation line items" : null,
       appliedRenovationEstimates > 0 ? "renovation estimate" : null

@@ -415,6 +415,35 @@ describe("property scoring", () => {
     );
   });
 
+  it("does not warn when setting text was checked and no preferred setting matched", () => {
+    const property = createPropertyRecord({
+      id: "property-no-preferred-setting",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 315000,
+      facts: [
+        createPropertyFact({
+          id: "fact-no-preferred-setting",
+          factKey: "setting.no_preferred_match",
+          label: "No Preferred Setting Match",
+          value: true
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-08-10T22:14:45.000Z",
+      () => "score-no-preferred-setting"
+    );
+
+    expect(evaluation.categoryScores.setting).toBe(0);
+    expect(evaluation.missingData).not.toContain(
+      "Setting and view facts are missing."
+    );
+  });
+
   it("records missing data warnings for incomplete records", () => {
     const property = createPropertyRecord({
       id: "property-4"

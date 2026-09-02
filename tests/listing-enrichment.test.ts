@@ -195,6 +195,35 @@ describe("listing page enrichment", () => {
     ).toBe(true);
   });
 
+  it("records a neutral setting coverage fact when text has no preferred setting", async () => {
+    const result = await enrichListingCandidate(
+      {
+        ...baseCandidate,
+        listingRemarks:
+          "Charming Colonial near Stafford Springs shops, restaurants, parks and amenities."
+      },
+      async () => createFetchResponse("Too Many Requests", 429)
+    );
+
+    expect(result.updates.settingFacts).toEqual([
+      {
+        factKey: "setting.no_preferred_match",
+        label: "No Preferred Setting Match",
+        confidence: 0.7,
+        evidence:
+          "Listing text was checked and no preferred setting/view phrases were matched."
+      }
+    ]);
+    expect(
+      result.diagnostics.some(
+        (item) =>
+          item.stage === "setting text" &&
+          item.status === "info" &&
+          item.message === "No preferred setting/view matched."
+      )
+    ).toBe(true);
+  });
+
   it("explains when style text inference fails and no photo can be analyzed", async () => {
     const result = await enrichListingCandidate(
       {

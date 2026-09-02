@@ -110,6 +110,35 @@ type RenovationInference = {
 
 type SettingInference = Array<z.infer<typeof inferredFactSchema>>;
 
+const noPreferredSettingMatchFactKey = "setting.no_preferred_match";
+
+function isNoPreferredSettingMatchFact(fact: z.infer<typeof inferredFactSchema>) {
+  return fact.factKey === noPreferredSettingMatchFactKey;
+}
+
+function getPreferredSettingFacts(settingFacts: SettingInference) {
+  return settingFacts.filter((fact) => !isNoPreferredSettingMatchFact(fact));
+}
+
+function addSettingCoverageFact(
+  settingFacts: SettingInference,
+  hasSourceText: boolean
+): SettingInference {
+  if (settingFacts.length > 0 || !hasSourceText) {
+    return settingFacts;
+  }
+
+  return [
+    {
+      factKey: noPreferredSettingMatchFactKey,
+      label: "No Preferred Setting Match",
+      confidence: 0.7,
+      evidence:
+        "Listing text was checked and no preferred setting/view phrases were matched."
+    }
+  ];
+}
+
 type EnrichmentDiagnostic = z.infer<typeof enrichmentDiagnosticSchema>;
 type EnrichmentDiagnosticStatus = EnrichmentDiagnostic["status"];
 
@@ -291,11 +320,13 @@ function summarizeRenovation(renovation: RenovationInference | null) {
 }
 
 function summarizeSettingFacts(settingFacts: SettingInference) {
-  if (settingFacts.length === 0) {
+  const preferredSettingFacts = getPreferredSettingFacts(settingFacts);
+
+  if (preferredSettingFacts.length === 0) {
     return "No setting/view facts returned.";
   }
 
-  return settingFacts
+  return preferredSettingFacts
     .map((fact) => `${fact.label}: ${fact.evidence}`)
     .join(" | ");
 }
@@ -306,20 +337,24 @@ function recordSettingInferenceDiagnostic(
   hasSourceText: boolean,
   sourceLabel: "Listing remarks" | "Listing page text"
 ) {
-  if (settingFacts.length > 0) {
+  const preferredSettingFacts = getPreferredSettingFacts(settingFacts);
+
+  if (preferredSettingFacts.length > 0) {
     addDiagnostic(
       "setting text",
       "success",
       `${sourceLabel} matched setting/view facts.`,
-      summarizeSettingFacts(settingFacts)
+      summarizeSettingFacts(preferredSettingFacts)
     );
     return;
   }
 
   addDiagnostic(
     "setting text",
-    "skipped",
-    `${sourceLabel} did not identify setting/view facts.`,
+    hasSourceText ? "info" : "skipped",
+    hasSourceText
+      ? "No preferred setting/view matched."
+      : `${sourceLabel} did not identify setting/view facts.`,
     hasSourceText
       ? "No supported setting/view phrases were matched."
       : "No listing text was available."
@@ -1726,7 +1761,12 @@ export async function enrichListingCandidate(
         updates: {
           ...emptyUpdates(),
           ...getStyleUpdate(requestTextStyle),
-          ...getSettingUpdate(requestTextSetting),
+          ...getSettingUpdate(
+            addSettingCoverageFact(
+              requestTextSetting,
+              Boolean(parsedCandidate.listingRemarks.trim())
+            )
+          ),
           ...getRenovationUpdate(renovation)
         },
         warnings,
@@ -1821,7 +1861,12 @@ export async function enrichListingCandidate(
         updates: {
           ...emptyUpdates(),
           ...getStyleUpdate(requestTextStyle),
-          ...getSettingUpdate(requestTextSetting),
+          ...getSettingUpdate(
+            addSettingCoverageFact(
+              requestTextSetting,
+              Boolean(parsedCandidate.listingRemarks.trim())
+            )
+          ),
           ...getRenovationUpdate(renovation)
         },
         warnings,
@@ -1912,7 +1957,9 @@ export async function enrichListingCandidate(
       primaryPhotoUrl: shouldFillPhoto ? (metadata.photoUrls[0] ?? "") : "",
       photoUrls: shouldFillPhoto ? metadata.photoUrls : [],
       ...getStyleUpdate(style),
-      ...getSettingUpdate(settingFacts),
+      ...getSettingUpdate(
+        addSettingCoverageFact(settingFacts, Boolean(pageText.trim()))
+      ),
       ...getRenovationUpdate(renovation)
     };
 
@@ -2109,7 +2156,12 @@ export async function enrichListingCandidate(
       updates: {
         ...emptyUpdates(),
         ...getStyleUpdate(requestTextStyle),
-        ...getSettingUpdate(requestTextSetting),
+        ...getSettingUpdate(
+          addSettingCoverageFact(
+            requestTextSetting,
+            Boolean(parsedCandidate.listingRemarks.trim())
+          )
+        ),
         ...getRenovationUpdate(renovation)
       },
       warnings,
