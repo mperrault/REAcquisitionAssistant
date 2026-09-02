@@ -581,10 +581,31 @@ function mergeEnrichmentIntoProperty(
         )
       : property.facts;
   const photoInferenceReference = "Photo renovation inference";
+  const settingInferenceReference = "Listing setting inference";
   let renovationFacts = facts;
+  let appliedSettingFacts = 0;
   let appliedRenovationScopes = 0;
   let appliedRenovationLineItems = 0;
   let appliedRenovationEstimates = 0;
+
+  for (const settingFact of enrichment.updates.settingFacts) {
+    const beforeFacts = renovationFacts;
+    renovationFacts = upsertInferredPropertyFact(
+      renovationFacts,
+      settingFact.factKey,
+      settingFact.label,
+      true,
+      settingFact.confidence,
+      settingFact.evidence
+        ? `${settingInferenceReference}: ${settingFact.evidence}`
+        : settingInferenceReference,
+      enrichment.fetchedAt
+    );
+
+    if (renovationFacts !== beforeFacts) {
+      appliedSettingFacts += 1;
+    }
+  }
 
   for (const scopeFact of enrichment.updates.renovationScopeFacts) {
     const beforeFacts = renovationFacts;
@@ -667,8 +688,13 @@ function mergeEnrichmentIntoProperty(
     appliedRenovationScopes > 0 ||
     appliedRenovationLineItems > 0 ||
     appliedRenovationEstimates > 0;
+  const didApplySetting = appliedSettingFacts > 0;
   const changed =
-    shouldApplyPrice || shouldApplyPhoto || shouldApplyStyle || didApplyRenovation;
+    shouldApplyPrice ||
+    shouldApplyPhoto ||
+    shouldApplyStyle ||
+    didApplySetting ||
+    didApplyRenovation;
 
   return {
     property: refreshInvestmentFacts({
@@ -689,6 +715,7 @@ function mergeEnrichmentIntoProperty(
       shouldApplyPrice ? "price" : null,
       shouldApplyPhoto ? "photo" : null,
       shouldApplyStyle ? "style" : null,
+      appliedSettingFacts > 0 ? "setting/view facts" : null,
       appliedRenovationScopes > 0 ? "renovation scope" : null,
       appliedRenovationLineItems > 0 ? "renovation line items" : null,
       appliedRenovationEstimates > 0 ? "renovation estimate" : null
@@ -1208,6 +1235,67 @@ export function PropertyManager() {
     setCaptureStatus(
       `Attached ${capture.photoUrls.length} photo URL${
         capture.photoUrls.length === 1 ? "" : "s"
+      }`
+    );
+  }
+
+  function handleClearAttachedCapturedPhotos() {
+    if (!draft) {
+      return;
+    }
+
+    const capturedPhotoUrls = new Set(
+      draft.photoEvidence
+        .filter((photo) => photo.sourceType === "browser_capture")
+        .map((photo) => photo.url)
+    );
+
+    if (capturedPhotoUrls.size === 0 && draft.sourceCaptures.length === 0) {
+      setCaptureStatus("No attached captured photos");
+      return;
+    }
+
+    const photoUrls = draft.photoUrls.filter(
+      (photoUrl) => !capturedPhotoUrls.has(photoUrl)
+    );
+    const primaryPhotoUrl = capturedPhotoUrls.has(draft.primaryPhotoUrl)
+      ? photoUrls[0] ?? ""
+      : draft.primaryPhotoUrl;
+    const removedPhotoCount = draft.photoEvidence.filter(
+      (photo) => photo.sourceType === "browser_capture"
+    ).length;
+    const nextProperty = {
+      ...draft,
+      primaryPhotoUrl,
+      photoUrls,
+      photoEvidence: draft.photoEvidence.filter(
+        (photo) => photo.sourceType !== "browser_capture"
+      ),
+      sourceCaptures: [],
+      enrichmentDiagnostics: [
+        ...draft.enrichmentDiagnostics,
+        createPropertyDiagnostic(
+          "source capture",
+          "info",
+          "Captured photo evidence removed.",
+          `Removed ${removedPhotoCount} browser-captured photo URL${
+            removedPhotoCount === 1 ? "" : "s"
+          }.`
+        )
+      ].slice(-80),
+      updatedAt: new Date().toISOString()
+    };
+    const nextPropertyState = upsertProperty(propertyState, nextProperty);
+    const persistedState = savePropertyState(window.localStorage, nextPropertyState);
+
+    setPropertyState(persistedState);
+    setDraft(cloneProperty(nextProperty));
+    setSelectedPropertyId(nextProperty.id);
+    setLoadSource("storage");
+    setSaveStatus("Captured photos removed");
+    setCaptureStatus(
+      `Removed ${removedPhotoCount} attached captured photo${
+        removedPhotoCount === 1 ? "" : "s"
       }`
     );
   }
@@ -1829,6 +1917,9 @@ export function PropertyManager() {
                     onRefreshCaptures={() => void loadBrowserCaptures("manual")}
                     onCopyBookmarklet={() => void handleCopyBookmarklet()}
                     onClearCaptures={() => void handleClearBrowserCaptures()}
+                    onClearAttachedCapturedPhotos={
+                      handleClearAttachedCapturedPhotos
+                    }
                     onAttachCapture={handleAttachCapture}
                   />
                 ) : null}
@@ -2170,6 +2261,7 @@ function SourcesTab({
   onRefreshCaptures,
   onCopyBookmarklet,
   onClearCaptures,
+  onClearAttachedCapturedPhotos,
   onAttachCapture
 }: {
   draft: PropertyRecord;
@@ -2179,6 +2271,7 @@ function SourcesTab({
   onRefreshCaptures: () => void;
   onCopyBookmarklet: () => void;
   onClearCaptures: () => void;
+  onClearAttachedCapturedPhotos: () => void;
   onAttachCapture: (captureId: string) => void;
 }) {
   const bookmarkletCode = React.useMemo(createBrowserCaptureBookmarklet, []);
@@ -2357,7 +2450,25 @@ function SourcesTab({
         </div>
       </Section>
 
-      <Section title="Photo Evidence">
+      <Section
+        title="Photo Evidence"
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onClearAttachedCapturedPhotos}
+            disabled={
+              !draft.photoEvidence.some(
+                (photo) => photo.sourceType === "browser_capture"
+              ) && draft.sourceCaptures.length === 0
+            }
+          >
+            <Trash2 aria-hidden="true" />
+            Clear Captured
+          </Button>
+        }
+      >
         {draft.photoEvidence.length === 0 ? (
           <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
             No captured photo evidence is attached to this property.

@@ -159,6 +159,42 @@ describe("listing page enrichment", () => {
     );
   });
 
+  it("infers setting and view facts from listing remarks when page fetch is rate limited", async () => {
+    const result = await enrichListingCandidate(
+      {
+        ...baseCandidate,
+        listingRemarks:
+          "Private wooded setting with partial lake views near Staffordville Lake."
+      },
+      async () => createFetchResponse("Too Many Requests", 429)
+    );
+
+    expect(result.warnings).toContain("Listing page fetch failed with HTTP 429.");
+    expect(result.updates.settingFacts).toEqual([
+      {
+        factKey: "setting.lake_view",
+        label: "Lake View",
+        confidence: 0.8,
+        evidence:
+          "Private wooded setting with partial lake views near Staffordville Lake."
+      },
+      {
+        factKey: "setting.woods_privacy",
+        label: "Woods / Privacy",
+        confidence: 0.7,
+        evidence: "Private wooded"
+      }
+    ]);
+    expect(
+      result.diagnostics.some(
+        (item) =>
+          item.stage === "setting text" &&
+          item.status === "success" &&
+          item.message === "Listing remarks matched setting/view facts."
+      )
+    ).toBe(true);
+  });
+
   it("explains when style text inference fails and no photo can be analyzed", async () => {
     const result = await enrichListingCandidate(
       {
@@ -186,6 +222,7 @@ describe("listing page enrichment", () => {
       const result = await enrichListingCandidate(
         {
           ...baseCandidate,
+          askingPrice: 315000,
           inferStyle: true
         },
         async (input) => {
@@ -224,6 +261,62 @@ describe("listing page enrichment", () => {
       expect(result.updates.styleFactKey).toBe("style.ranch");
       expect(result.updates.styleConfidence).toBe(0.72);
       expect(result.updates.styleSource).toBe("photo_inference");
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
+  it("retries style photo inference one image at a time when a batch image is rejected", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const apiRequestBodies: unknown[] = [];
+
+    try {
+      const result = await enrichListingCandidate(
+        {
+          ...baseCandidate,
+          askingPrice: 315000,
+          inferStyle: true
+        },
+        async (input, init) => {
+          if (input.includes("api.openai.com")) {
+            apiRequestBodies.push(JSON.parse(String(init?.body)));
+
+            if (apiRequestBodies.length === 1) {
+              return createJsonResponse(
+                { error: { message: "Invalid image URL." } },
+                400
+              );
+            }
+
+            return createJsonResponse({
+              output_text: JSON.stringify({
+                houseStyle: "Farmhouse",
+                confidence: 0.73,
+                evidence: "Gabled farmhouse form is visible."
+              })
+            });
+          }
+
+          return createFetchResponse(`<html>
+            <head>
+              <meta property="og:image" content="https://photos.zillowstatic.com/fp/first-exterior.jpg" />
+              <meta property="og:image" content="https://photos.zillowstatic.com/fp/second-exterior.jpg" />
+            </head>
+            <body>47 High St Stafford CT 06076 Detached home.</body>
+          </html>`);
+        }
+      );
+
+      expect(apiRequestBodies).toHaveLength(2);
+      expect(result.updates.houseStyle).toBe("Farmhouse");
+      expect(result.updates.styleFactKey).toBe("style.farmhouse");
+      expect(result.updates.styleSource).toBe("photo_inference");
+      expect(result.warnings).toEqual([]);
     } finally {
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;

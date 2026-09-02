@@ -33,6 +33,13 @@ const renovationLineItemSchema = z.object({
   evidence: z.string()
 });
 
+const inferredFactSchema = z.object({
+  factKey: z.string().min(1),
+  label: z.string().min(1),
+  confidence: z.number().min(0).max(1).nullable(),
+  evidence: z.string()
+});
+
 const enrichmentDiagnosticSchema = z.object({
   id: z.string().min(1),
   at: z.string().datetime(),
@@ -59,6 +66,7 @@ export const listingCandidateEnrichmentResponseSchema = z.object({
     styleConfidence: z.number().min(0).max(1).nullable(),
     styleEvidence: z.string(),
     styleSource: z.enum(["", "listing_text", "photo_inference"]),
+    settingFacts: z.array(inferredFactSchema),
     renovationScopeFacts: z.array(renovationScopeFactSchema),
     renovationLineItems: z.array(renovationLineItemSchema),
     renovationExpectedCost: z.number().int().nonnegative().nullable(),
@@ -99,6 +107,8 @@ type RenovationInference = {
   lowEstimate: number | null;
   highEstimate: number | null;
 };
+
+type SettingInference = Array<z.infer<typeof inferredFactSchema>>;
 
 type EnrichmentDiagnostic = z.infer<typeof enrichmentDiagnosticSchema>;
 type EnrichmentDiagnosticStatus = EnrichmentDiagnostic["status"];
@@ -165,6 +175,75 @@ const renovationScopeDefinitions = [
   }
 ] as const;
 
+const settingDefinitions = [
+  {
+    factKey: "setting.country_mountain_view",
+    label: "Country / Mountain View",
+    confidence: 0.72,
+    patterns: [/\bcountry setting\b/i, /\brural setting\b/i, /\bmountain views?\b/i]
+  },
+  {
+    factKey: "setting.open_fields_pastoral",
+    label: "Open Fields / Pastoral",
+    confidence: 0.74,
+    patterns: [/\bopen fields?\b/i, /\bpastoral\b/i, /\bpasture\b/i, /\bmeadow\b/i]
+  },
+  {
+    factKey: "setting.horse_property",
+    label: "Horse Property",
+    confidence: 0.76,
+    patterns: [/\bhorse property\b/i, /\bequestrian\b/i, /\bhorse barn\b/i]
+  },
+  {
+    factKey: "setting.small_farm",
+    label: "Small Farm",
+    confidence: 0.72,
+    patterns: [/\bsmall farm\b/i, /\bfarmette\b/i, /\bbarn\b/i]
+  },
+  {
+    factKey: "setting.river_frontage",
+    label: "River Frontage",
+    confidence: 0.78,
+    patterns: [/\briver frontage\b/i, /\briverfront\b/i]
+  },
+  {
+    factKey: "setting.lake_view",
+    label: "Lake View",
+    confidence: 0.8,
+    patterns: [/\blake views?\b/i, /\bviews? (?:of|to) [a-z\s]+ lake\b/i]
+  },
+  {
+    factKey: "setting.pond_view",
+    label: "Pond View",
+    confidence: 0.78,
+    patterns: [/\bpond views?\b/i, /\bviews? (?:of|to) [a-z\s]+ pond\b/i]
+  },
+  {
+    factKey: "setting.lake_frontage",
+    label: "Lake Frontage",
+    confidence: 0.82,
+    patterns: [/\blake frontage\b/i, /\blakefront\b/i, /\bwaterfront\b/i]
+  },
+  {
+    factKey: "setting.pond_frontage",
+    label: "Pond Frontage",
+    confidence: 0.8,
+    patterns: [/\bpond frontage\b/i, /\bpondfront\b/i]
+  },
+  {
+    factKey: "setting.historic_new_england",
+    label: "Historic New England Setting",
+    confidence: 0.68,
+    patterns: [/\bhistoric\b/i, /\bantique\b/i, /\bbuilt in 18\d{2}\b/i]
+  },
+  {
+    factKey: "setting.woods_privacy",
+    label: "Woods / Privacy",
+    confidence: 0.7,
+    patterns: [/\bwooded privacy\b/i, /\bwooded lot\b/i, /\bprivate wooded\b/i]
+  }
+] as const;
+
 function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -211,6 +290,42 @@ function summarizeRenovation(renovation: RenovationInference | null) {
   ].join(" | ");
 }
 
+function summarizeSettingFacts(settingFacts: SettingInference) {
+  if (settingFacts.length === 0) {
+    return "No setting/view facts returned.";
+  }
+
+  return settingFacts
+    .map((fact) => `${fact.label}: ${fact.evidence}`)
+    .join(" | ");
+}
+
+function recordSettingInferenceDiagnostic(
+  addDiagnostic: ReturnType<typeof createDiagnosticRecorder>["add"],
+  settingFacts: SettingInference,
+  hasSourceText: boolean,
+  sourceLabel: "Listing remarks" | "Listing page text"
+) {
+  if (settingFacts.length > 0) {
+    addDiagnostic(
+      "setting text",
+      "success",
+      `${sourceLabel} matched setting/view facts.`,
+      summarizeSettingFacts(settingFacts)
+    );
+    return;
+  }
+
+  addDiagnostic(
+    "setting text",
+    "skipped",
+    `${sourceLabel} did not identify setting/view facts.`,
+    hasSourceText
+      ? "No supported setting/view phrases were matched."
+      : "No listing text was available."
+  );
+}
+
 function getEligibleVisionImageUrls(photoUrls: string[]) {
   return Array.from(new Set(photoUrls.filter(isEligibleVisionImageUrl)));
 }
@@ -235,12 +350,19 @@ function getRenovationUpdate(renovation: RenovationInference | null) {
   };
 }
 
+function getSettingUpdate(settingFacts: SettingInference | null) {
+  return {
+    settingFacts: settingFacts ?? []
+  };
+}
+
 function emptyUpdates() {
   return {
     askingPrice: null,
     primaryPhotoUrl: "",
     photoUrls: [],
     ...getStyleUpdate(null),
+    ...getSettingUpdate(null),
     ...getRenovationUpdate(null)
   };
 }
@@ -371,6 +493,48 @@ function inferHouseStyleFromText(text: string): StyleInference | null {
   }
 
   return null;
+}
+
+function inferSettingFactsFromText(text: string): SettingInference {
+  const normalized = normalizeText(text);
+  const facts: SettingInference = [];
+
+  if (!normalized) {
+    return facts;
+  }
+
+  for (const definition of settingDefinitions) {
+    for (const pattern of definition.patterns) {
+      if (!pattern.test(normalized)) {
+        continue;
+      }
+
+      facts.push({
+        factKey: definition.factKey,
+        label: definition.label,
+        confidence: definition.confidence,
+        evidence: getTextEvidence(normalized, pattern)
+      });
+      break;
+    }
+  }
+
+  return facts;
+}
+
+function mergeSettingFacts(
+  primary: SettingInference,
+  fallback: SettingInference
+): SettingInference {
+  const facts = [...primary];
+
+  for (const fact of fallback) {
+    if (!facts.some((item) => item.factKey === fact.factKey)) {
+      facts.push(fact);
+    }
+  }
+
+  return facts;
 }
 
 function parseStyleLabel(value: unknown) {
@@ -861,48 +1025,77 @@ async function inferHouseStyleFromPhotos(
     };
   }
 
-  const response = await fetcher("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_VISION_MODEL?.trim() || "gpt-5-mini",
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text:
-                "Classify the likely exterior house style from these real-estate photos. " +
-                "Choose exactly one of: Cape, Cottage, Farmhouse, Ranch, Colonial, Contemporary, Log Home. " +
-                "If uncertain, return confidence below 0.55. Return only JSON with keys houseStyle, confidence, evidence."
-            },
-            ...imageUrls.map((imageUrl) => ({
-              type: "input_image",
-              image_url: imageUrl,
-              detail: "low"
-            }))
-          ]
-        }
-      ]
-    })
-  });
+  async function requestStyle(imageUrlsForRequest: string[]) {
+    const response = await fetcher("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_VISION_MODEL?.trim() || "gpt-5-mini",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  "Classify the likely exterior house style from these real-estate photos. " +
+                  "Choose exactly one of: Cape, Cottage, Farmhouse, Ranch, Colonial, Contemporary, Log Home. " +
+                  "If uncertain, return confidence below 0.55. Return only JSON with keys houseStyle, confidence, evidence."
+              },
+              ...imageUrlsForRequest.map((imageUrl) => ({
+                type: "input_image",
+                image_url: imageUrl,
+                detail: "low"
+              }))
+            ]
+          }
+        ]
+      })
+    });
 
-  if (!response.ok) {
+    if (!response.ok) {
+      return {
+        style: null,
+        warning: `photo inference failed with HTTP ${response.status}${await getResponseErrorSuffix(response)}`
+      };
+    }
+
     return {
-      style: null,
-      warning: `photo inference failed with HTTP ${response.status}`
+      style: parseVisionStyleInference(
+        extractResponseOutputText(await response.json())
+      ),
+      warning: null
     };
   }
 
-  const style = parseVisionStyleInference(extractResponseOutputText(await response.json()));
+  const result = await requestStyle(imageUrls);
+
+  if (result.style || responseWarningIsNotImageSpecific(result.warning)) {
+    return {
+      style: result.style,
+      warning:
+        result.warning ??
+        (result.style ? null : "photo inference ran but confidence was below threshold")
+    };
+  }
+
+  if (imageUrls.length > 1) {
+    for (const imageUrl of imageUrls) {
+      const singleImageResult = await requestStyle([imageUrl]);
+
+      if (singleImageResult.style) {
+        return singleImageResult;
+      }
+    }
+  }
 
   return {
-    style,
-    warning: style ? null : "photo inference ran but confidence was below threshold"
+    style: null,
+    warning:
+      result.warning ?? "photo inference ran but confidence was below threshold"
   };
 }
 
@@ -930,57 +1123,152 @@ async function inferRenovationsFromPhotos(
   const allowedScopes = renovationScopeDefinitions
     .map((definition) => `${definition.factKey} (${definition.label})`)
     .join(", ");
-  const response = await fetcher("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: process.env.OPENAI_VISION_MODEL?.trim() || "gpt-5-mini",
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text:
-                "Infer visible renovation needs from these real-estate listing photos only. " +
-                "Do not infer hidden defects, code issues, electrical, plumbing, structural, roof, or foundation work unless directly visible. " +
-                `Use only these scope fact keys: ${allowedScopes}. ` +
-                "Return conservative ballpark USD costs for visible cosmetic and functional work. " +
-                "Return only JSON with keys scopeFacts, lineItems, expectedCost, lowEstimate, highEstimate. " +
-                "scopeFacts must contain objects with factKey, confidence, evidence. " +
-                "lineItems must contain objects with label, amount, confidence, evidence."
-            },
-            ...imageUrls.map((imageUrl) => ({
-              type: "input_image",
-              image_url: imageUrl,
-              detail: "low"
-            }))
-          ]
-        }
-      ]
-    })
-  });
 
-  if (!response.ok) {
+  async function requestRenovation(imageUrlsForRequest: string[]) {
+    const response = await fetcher("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: process.env.OPENAI_VISION_MODEL?.trim() || "gpt-5-mini",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  "Infer visible renovation needs from these real-estate listing photos only. " +
+                  "Do not infer hidden defects, code issues, electrical, plumbing, structural, roof, or foundation work unless directly visible. " +
+                  `Use only these scope fact keys: ${allowedScopes}. ` +
+                  "Return conservative ballpark USD costs for visible cosmetic and functional work. " +
+                  "Return only JSON with keys scopeFacts, lineItems, expectedCost, lowEstimate, highEstimate. " +
+                  "scopeFacts must contain objects with factKey, confidence, evidence. " +
+                  "lineItems must contain objects with label, amount, confidence, evidence."
+              },
+              ...imageUrlsForRequest.map((imageUrl) => ({
+                type: "input_image",
+                image_url: imageUrl,
+                detail: "low"
+              }))
+            ]
+          }
+        ]
+      })
+    });
+
+    if (!response.ok) {
+      return {
+        renovation: null,
+        warning: `renovation photo inference failed with HTTP ${response.status}${await getResponseErrorSuffix(response)}`
+      };
+    }
+
     return {
-      renovation: null,
-      warning: `renovation photo inference failed with HTTP ${response.status}`
+      renovation: parseVisionRenovationInference(
+        extractResponseOutputText(await response.json())
+      ),
+      warning: null
     };
   }
 
-  const renovation = parseVisionRenovationInference(
-    extractResponseOutputText(await response.json())
-  );
+  const result = await requestRenovation(imageUrls);
+
+  if (result.renovation || responseWarningIsNotImageSpecific(result.warning)) {
+    return {
+      renovation: result.renovation,
+      warning:
+        result.warning ??
+        (result.renovation
+          ? null
+          : "renovation photo inference ran but did not return confident scope")
+    };
+  }
+
+  if (imageUrls.length > 1) {
+    for (const imageUrl of imageUrls) {
+      const singleImageResult = await requestRenovation([imageUrl]);
+
+      if (singleImageResult.renovation) {
+        return singleImageResult;
+      }
+    }
+  }
 
   return {
-    renovation,
-    warning: renovation
-      ? null
-      : "renovation photo inference ran but did not return confident scope"
+    renovation: null,
+    warning:
+      result.warning ??
+      "renovation photo inference ran but did not return confident scope"
   };
+}
+
+async function getResponseErrorSuffix(
+  response: Pick<Response, "json" | "text">
+) {
+  const errorMessage = await readResponseErrorMessage(response);
+
+  return errorMessage ? `: ${errorMessage}` : "";
+}
+
+async function readResponseErrorMessage(
+  response: Pick<Response, "json" | "text">
+) {
+  try {
+    const jsonReader = (response as { json?: unknown }).json;
+
+    if (typeof jsonReader === "function") {
+      const payload = (await jsonReader.call(response)) as unknown;
+      const message = getPayloadErrorMessage(payload);
+
+      if (message) {
+        return message;
+      }
+    }
+  } catch {
+    // Fall back to text when the response is not JSON.
+  }
+
+  try {
+    const textReader = (response as { text?: unknown }).text;
+
+    if (typeof textReader === "function") {
+      return normalizeText(String(await textReader.call(response))).slice(0, 220);
+    }
+  } catch {
+    return "";
+  }
+
+  return "";
+}
+
+function getPayloadErrorMessage(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const record = payload as Record<string, unknown>;
+  const error = record.error;
+
+  if (error && typeof error === "object") {
+    const message = (error as Record<string, unknown>).message;
+
+    if (typeof message === "string") {
+      return normalizeText(message).slice(0, 220);
+    }
+  }
+
+  if (typeof record.message === "string") {
+    return normalizeText(record.message).slice(0, 220);
+  }
+
+  return "";
+}
+
+function responseWarningIsNotImageSpecific(warning: string | null) {
+  return Boolean(warning && !/\bHTTP 400\b/.test(warning));
 }
 
 async function inferRenovationsSafelyFromPhotos(
@@ -1221,6 +1509,9 @@ export async function enrichListingCandidate(
   const requestTextRenovation = shouldInferRenovation
     ? inferRenovationFromText(parsedCandidate.listingRemarks)
     : null;
+  const requestTextSetting = inferSettingFactsFromText(
+    parsedCandidate.listingRemarks
+  );
   const requestPhotoUrls = Array.from(
     new Set([
       ...(parsedCandidate.primaryPhotoUrl ? [parsedCandidate.primaryPhotoUrl] : []),
@@ -1315,6 +1606,12 @@ export async function enrichListingCandidate(
         photoRenovation?.renovation ?? null,
         requestTextRenovation
       );
+      recordSettingInferenceDiagnostic(
+        addDiagnostic,
+        requestTextSetting,
+        Boolean(parsedCandidate.listingRemarks.trim()),
+        "Listing remarks"
+      );
 
       if (photoRenovation?.warning) {
         warnings.push(photoRenovation.warning);
@@ -1349,6 +1646,7 @@ export async function enrichListingCandidate(
         updates: {
           ...emptyUpdates(),
           ...getStyleUpdate(requestTextStyle),
+          ...getSettingUpdate(requestTextSetting),
           ...getRenovationUpdate(renovation)
         },
         warnings,
@@ -1403,6 +1701,12 @@ export async function enrichListingCandidate(
         photoRenovation?.renovation ?? null,
         requestTextRenovation
       );
+      recordSettingInferenceDiagnostic(
+        addDiagnostic,
+        requestTextSetting,
+        Boolean(parsedCandidate.listingRemarks.trim()),
+        "Listing remarks"
+      );
 
       if (photoRenovation?.warning) {
         warnings.push(photoRenovation.warning);
@@ -1437,6 +1741,7 @@ export async function enrichListingCandidate(
         updates: {
           ...emptyUpdates(),
           ...getStyleUpdate(requestTextStyle),
+          ...getSettingUpdate(requestTextSetting),
           ...getRenovationUpdate(renovation)
         },
         warnings,
@@ -1480,6 +1785,17 @@ export async function enrichListingCandidate(
       photoRenovation?.renovation ?? null,
       textRenovation
     );
+    const pageText = `${metadata.pageText} ${parsedCandidate.listingRemarks}`;
+    const settingFacts = mergeSettingFacts(
+      inferSettingFactsFromText(pageText),
+      requestTextSetting
+    );
+    recordSettingInferenceDiagnostic(
+      addDiagnostic,
+      settingFacts,
+      Boolean(pageText.trim()),
+      "Listing page text"
+    );
     if (textRenovation) {
       addDiagnostic(
         "renovation text",
@@ -1516,6 +1832,7 @@ export async function enrichListingCandidate(
       primaryPhotoUrl: shouldFillPhoto ? (metadata.photoUrls[0] ?? "") : "",
       photoUrls: shouldFillPhoto ? metadata.photoUrls : [],
       ...getStyleUpdate(style),
+      ...getSettingUpdate(settingFacts),
       ...getRenovationUpdate(renovation)
     };
 
@@ -1672,6 +1989,12 @@ export async function enrichListingCandidate(
       photoRenovation?.renovation ?? null,
       requestTextRenovation
     );
+    recordSettingInferenceDiagnostic(
+      addDiagnostic,
+      requestTextSetting,
+      Boolean(parsedCandidate.listingRemarks.trim()),
+      "Listing remarks"
+    );
 
     if (photoRenovation?.warning) {
       warnings.push(photoRenovation.warning);
@@ -1706,7 +2029,8 @@ export async function enrichListingCandidate(
       updates: {
         ...emptyUpdates(),
         ...getStyleUpdate(requestTextStyle),
-          ...getRenovationUpdate(renovation)
+        ...getSettingUpdate(requestTextSetting),
+        ...getRenovationUpdate(renovation)
       },
       warnings,
       diagnostics
