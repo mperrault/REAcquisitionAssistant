@@ -224,7 +224,7 @@ function createPropertyDiagnostic(
 }
 
 function createBrowserCaptureBookmarklet() {
-  const script = `(()=>{const compact=(value)=>String(value||"").replace(/\\s+/g," ").trim();const text=document.body?document.body.innerText:"";const addressMatch=text.match(/\\d{1,6}\\s+[A-Za-z0-9 .'-]+?(?:Road|Rd\\.?|Street|St\\.?|Avenue|Ave\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Court|Ct\\.?|Circle|Cir\\.?|Trail|Terrace|Ter\\.?|Way|Place|Pl\\.?|Boulevard|Blvd\\.?|Highway|Hwy\\.?),\\s*[A-Za-z .'-]+,\\s*[A-Z]{2}\\s+\\d{5}(?:-\\d{4})?/i);const sourceSite=location.hostname.replace(/^www\\./,"");const urls=[];const push=(url,img,index)=>{if(!url)return;const normalized=String(url).trim();const lower=normalized.toLowerCase();if(!/^https?:\\/\\//i.test(normalized))return;if(lower.includes("zillow_web")||lower.includes("z-logo")||lower.includes("staticmap")||lower.includes("app-store")||lower.includes("google-play")||lower.includes("footer-art")||lower.includes("/agents/")||lower.includes("agent"))return;if(sourceSite.includes("zillow")&&!lower.includes("photos.zillowstatic.com/fp/"))return;if(sourceSite.includes("zillow")&&!lower.includes("-cc_ft_")&&!/image of|photo of|road|rd|street|st|avenue|ave/i.test(img.alt||"")&&index>12)return;if(sourceSite.includes("realtor")&&!/rdcpix|realtor|move/i.test(lower))return;urls.push(normalized);};Array.from(document.images).forEach((img,index)=>{push(img.currentSrc||img.src,img,index);String(img.getAttribute("srcset")||"").split(",").map((part)=>part.trim().split(/\\s+/)[0]).forEach((url)=>push(url,img,index));});const photoUrls=Array.from(new Set(urls)).slice(0,40);const special=text.match(/What's special\\s+([\\s\\S]*?)(?:Show more|\\d+\\s+(?:minute|hour|day|month)s?\\s+on\\s+Zillow|Facts & features|Listed by:|Source:)/i);const payload={pageUrl:location.href,title:document.title,sourceSite,addressFull:addressMatch?compact(addressMatch[0]):"",listingRemarks:compact(special&&special[1]?special[1]:""),photoUrls};fetch("http://localhost:3000/api/browser-capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then((response)=>{if(!response.ok)throw new Error("HTTP "+response.status);alert("Sent "+photoUrls.length+" photo URLs to RE Assistant.");}).catch(()=>{prompt("Capture failed. Copy this payload into RE Assistant if needed:",JSON.stringify(payload));});})();`;
+  const script = `(()=>{const compact=(value)=>String(value||"").replace(/\\s+/g," ").trim();const text=document.body?document.body.innerText:"";const sourceSite=location.hostname.replace(/^www\\./,"");const addressPattern=/\\d{1,6}[ \\t]+[A-Za-z0-9 .'-]+?(?:Road|Rd\\.?|Street|St\\.?|Avenue|Ave\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Court|Ct\\.?|Circle|Cir\\.?|Trail|Terrace|Ter\\.?|Way|Place|Pl\\.?|Boulevard|Blvd\\.?|Highway|Hwy\\.?),\\s*[A-Za-z .'-]+,\\s*[A-Z]{2}\\s+\\d{5}(?:-\\d{4})?/i;const titleMatch=document.title.match(addressPattern);const lineMatch=text.split(/\\n+/).map(compact).find((line)=>addressPattern.test(line));const addressFull=compact(titleMatch?titleMatch[0]:lineMatch||"");const addressLine1=compact(addressFull.split(",")[0]||"");const expansions={rd:"road",st:"street",ave:"avenue",ln:"lane",dr:"drive",ct:"court",cir:"circle",ter:"terrace",pl:"place",blvd:"boulevard",hwy:"highway"};const tokens=addressLine1.toLowerCase().replace(/\\b(rd|st|ave|ln|dr|ct|cir|ter|pl|blvd|hwy)\\.?\\b/g,(value)=>expansions[value.replace(".","")]||value).split(/[^a-z0-9]+/).filter(Boolean).slice(0,4);const details=[];const seen=new Set();const keep=(url,img,index)=>{if(!url)return;const normalized=String(url).trim();const lower=normalized.toLowerCase();const alt=compact(img.alt||img.getAttribute("aria-label")||"");const altLower=alt.toLowerCase();const imageId=lower.match(/photos\\.zillowstatic\\.com\\/fp\\/([a-f0-9]+)-/);const key=imageId&&imageId[1]?sourceSite+":"+imageId[1]:normalized;if(!/^https?:\\/\\//i.test(normalized))return;if(seen.has(key))return;if(lower.includes("zillow_web")||lower.includes("z-logo")||lower.includes("staticmap")||lower.includes("app-store")||lower.includes("google-play")||lower.includes("footer-art")||lower.includes("/agents/")||lower.includes("agent"))return;if(sourceSite.includes("zillow")){if(!lower.includes("photos.zillowstatic.com/fp/"))return;const matchesTarget=tokens.length>0&&tokens.every((token)=>altLower.includes(token));const earlyHero=!altLower&&lower.includes("-cc_ft_")&&index<8;if(!matchesTarget&&!earlyHero)return;}if(sourceSite.includes("realtor")&&!/rdcpix|realtor|move/i.test(lower))return;seen.add(key);details.push({url:normalized,alt,index});};Array.from(document.images).forEach((img,index)=>{keep(img.currentSrc||img.src,img,index);String(img.getAttribute("srcset")||"").split(",").map((part)=>part.trim().split(/\\s+/)[0]).forEach((url)=>keep(url,img,index));});const photoDetails=details.slice(0,40);const photoUrls=photoDetails.map((photo)=>photo.url);const special=text.match(/What's special\\s+([\\s\\S]*?)(?:Show more|\\d+\\s+(?:minute|hour|day|month)s?\\s+on\\s+Zillow|Facts & features|Listed by:|Source:)/i);const payload={pageUrl:location.href,title:document.title,sourceSite,addressFull,listingRemarks:compact(special&&special[1]?special[1]:""),photoDetails,photoUrls};fetch("http://localhost:3000/api/browser-capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then((response)=>{if(!response.ok)throw new Error("HTTP "+response.status);alert("Sent "+photoUrls.length+" photo URLs to RE Assistant.");}).catch(()=>{prompt("Capture failed. Copy this payload into RE Assistant if needed:",JSON.stringify(payload));});})();`;
 
   return `javascript:${encodeURIComponent(script)}`;
 }
@@ -1160,6 +1160,30 @@ export function PropertyManager() {
     }
   }
 
+  async function handleClearBrowserCaptures() {
+    setIsLoadingCaptures(true);
+    setCaptureStatus("Clearing captures");
+
+    try {
+      const response = await fetch("/api/browser-capture", {
+        method: "DELETE"
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to clear browser captures.");
+      }
+
+      setBrowserCaptures([]);
+      setCaptureStatus("Capture queue cleared");
+    } catch (error) {
+      setCaptureStatus(
+        error instanceof Error ? error.message : "Unable to clear captures"
+      );
+    } finally {
+      setIsLoadingCaptures(false);
+    }
+  }
+
   function handleAttachCapture(captureId: string) {
     if (!draft) {
       return;
@@ -1804,6 +1828,7 @@ export function PropertyManager() {
                     captureStatus={captureStatus}
                     onRefreshCaptures={() => void loadBrowserCaptures("manual")}
                     onCopyBookmarklet={() => void handleCopyBookmarklet()}
+                    onClearCaptures={() => void handleClearBrowserCaptures()}
                     onAttachCapture={handleAttachCapture}
                   />
                 ) : null}
@@ -2144,6 +2169,7 @@ function SourcesTab({
   captureStatus,
   onRefreshCaptures,
   onCopyBookmarklet,
+  onClearCaptures,
   onAttachCapture
 }: {
   draft: PropertyRecord;
@@ -2152,6 +2178,7 @@ function SourcesTab({
   captureStatus: string;
   onRefreshCaptures: () => void;
   onCopyBookmarklet: () => void;
+  onClearCaptures: () => void;
   onAttachCapture: (captureId: string) => void;
 }) {
   const bookmarkletCode = React.useMemo(createBrowserCaptureBookmarklet, []);
@@ -2184,6 +2211,16 @@ function SourcesTab({
             >
               <Clipboard aria-hidden="true" />
               Copy Link
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onClearCaptures}
+              disabled={isLoadingCaptures || browserCaptures.length === 0}
+            >
+              <Trash2 aria-hidden="true" />
+              Clear
             </Button>
             <Button
               type="button"
