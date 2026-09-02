@@ -2154,7 +2154,7 @@ function SourcesTab({
   onCopyBookmarklet: () => void;
   onAttachCapture: (captureId: string) => void;
 }) {
-  const bookmarkletHref = React.useMemo(createBrowserCaptureBookmarklet, []);
+  const bookmarkletCode = React.useMemo(createBrowserCaptureBookmarklet, []);
   const sortedCaptures = React.useMemo(
     () =>
       [...browserCaptures].sort((a, b) => {
@@ -2202,16 +2202,24 @@ function SourcesTab({
         }
       >
         <div className="grid gap-4">
-          <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-card p-3">
-            <Button type="button" asChild>
-              <a href={bookmarkletHref}>
-                <Camera aria-hidden="true" />
-                Send to RE Assistant
-              </a>
-            </Button>
-            <div className="text-sm text-muted-foreground">
-              Drag once to bookmarks, then click it on a visible listing page.
+          <div className="grid gap-3 rounded-md border border-border bg-card p-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <Camera className="size-4 text-muted-foreground" aria-hidden="true" />
+              <div className="text-sm font-medium">Send to RE Assistant</div>
+              <Badge variant="outline">bookmarklet</Badge>
             </div>
+            <div className="text-sm text-muted-foreground">
+              Copy this code, create a browser bookmark named Send to RE
+              Assistant, and paste the code into the bookmark URL. Click that
+              bookmark on a visible Zillow or Realtor listing page.
+            </div>
+            <Textarea
+              value={bookmarkletCode}
+              readOnly
+              rows={3}
+              className="font-mono text-xs"
+              onFocus={(event) => event.currentTarget.select()}
+            />
           </div>
 
           {sortedCaptures.length === 0 ? (
