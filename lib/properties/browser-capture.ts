@@ -145,8 +145,12 @@ export function selectCapturePhotoUrls({
   const normalizedUrls = normalizePhotoUrls(sourceUrls);
   const normalizedSourceSite = sourceSite.toLowerCase();
 
-  if (!normalizedSourceSite.includes("zillow") || normalizedDetails.length === 0) {
+  if (!normalizedSourceSite.includes("zillow")) {
     return normalizedUrls.slice(0, 80);
+  }
+
+  if (normalizedDetails.length === 0) {
+    return [];
   }
 
   const addressTokens = getAddressTokens(addressLine1);

@@ -2323,24 +2323,30 @@ function SourcesTab({
                     </div>
 
                     {capture.photoUrls.length > 0 ? (
-                      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-                        {capture.photoUrls.slice(0, 12).map((photoUrl) => (
-                          <div
-                            key={photoUrl}
-                            className="relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-secondary"
-                          >
-                            <Image
-                              src={photoUrl}
-                              alt="Captured listing photo"
-                              fill
-                              sizes="160px"
-                              className="object-cover"
-                              loading="lazy"
-                              unoptimized
-                              referrerPolicy="no-referrer"
-                            />
-                          </div>
-                        ))}
+                      <div className="mt-3 grid gap-2">
+                        <div className="text-xs text-muted-foreground">
+                          Previewing {Math.min(capture.photoUrls.length, 12)} of{" "}
+                          {capture.photoUrls.length} captured photos.
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                          {capture.photoUrls.slice(0, 12).map((photoUrl) => (
+                            <div
+                              key={photoUrl}
+                              className="relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-secondary"
+                            >
+                              <Image
+                                src={photoUrl}
+                                alt="Captured listing photo"
+                                fill
+                                sizes="160px"
+                                className="object-cover"
+                                loading="lazy"
+                                unoptimized
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     ) : null}
                   </div>

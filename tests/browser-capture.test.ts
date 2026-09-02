@@ -39,6 +39,18 @@ describe("browser capture", () => {
           "https://www.zillow.com/homedetails/9-Schwanda-Rd-Stafford-Springs-CT-06076/464955916_zpid/",
         title: "9 Schwanda Road, Stafford Springs, CT 06076 | Zillow",
         listingRemarks: " Lots of possibilities with some TLC. ",
+        photoDetails: [
+          {
+            url: "https://photos.zillowstatic.com/fp/photo-one-cc_ft_1344.webp",
+            alt: "1st image of 9 Schwanda Road",
+            index: 0
+          },
+          {
+            url: "https://photos.zillowstatic.com/fp/d79c34cc3fb9c13a4cbe1437a108a1d7-zillow_web_48_23.jpg",
+            alt: "Smart MLS",
+            index: 1
+          }
+        ],
         photoUrls: [
           "https://photos.zillowstatic.com/fp/photo-one-cc_ft_1344.webp",
           "https://photos.zillowstatic.com/fp/photo-one-cc_ft_1344.webp",
@@ -63,6 +75,24 @@ describe("browser capture", () => {
     expect(capture.photoUrls).toEqual([
       "https://photos.zillowstatic.com/fp/photo-one-cc_ft_1344.webp"
     ]);
+  });
+
+  it("does not trust legacy Zillow captures without image details", () => {
+    const capture = createBrowserCaptureRecord(
+      {
+        pageUrl:
+          "https://www.zillow.com/homedetails/9-Schwanda-Rd-Stafford-Springs-CT-06076/464955916_zpid/",
+        title: "9 Schwanda Road, Stafford Springs, CT 06076 | Zillow",
+        photoUrls: [
+          "https://photos.zillowstatic.com/fp/target-cc_ft_1344.webp",
+          "https://photos.zillowstatic.com/fp/nearby-cc_ft_1344.webp"
+        ]
+      },
+      "2026-09-01T12:00:00.000Z",
+      () => "legacy-capture"
+    );
+
+    expect(capture.photoUrls).toEqual([]);
   });
 
   it("keeps distinct eligible photo URLs in source order", () => {
