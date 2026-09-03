@@ -309,7 +309,128 @@ function createPropertyDiagnostic(
 }
 
 function createBrowserCaptureBookmarklet() {
-  const script = `(()=>{const compact=(value)=>String(value||"").replace(/\\s+/g," ").trim();const text=document.body?document.body.innerText:"";const sourceSite=location.hostname.replace(/^www\\./,"");const addressPattern=/\\d{1,6}[ \\t]+[A-Za-z0-9 .'-]+?(?:Road|Rd\\.?|Street|St\\.?|Avenue|Ave\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Court|Ct\\.?|Circle|Cir\\.?|Trail|Terrace|Ter\\.?|Way|Place|Pl\\.?|Boulevard|Blvd\\.?|Highway|Hwy\\.?),\\s*[A-Za-z .'-]+,\\s*[A-Z]{2}\\s+\\d{5}(?:-\\d{4})?/i;const titleMatch=document.title.match(addressPattern);const lineMatch=text.split(/\\n+/).map(compact).find((line)=>addressPattern.test(line));const addressFull=compact(titleMatch?titleMatch[0]:lineMatch||"");const addressLine1=compact(addressFull.split(",")[0]||"");const expansions={rd:"road",st:"street",ave:"avenue",ln:"lane",dr:"drive",ct:"court",cir:"circle",ter:"terrace",pl:"place",blvd:"boulevard",hwy:"highway"};const tokens=addressLine1.toLowerCase().replace(/\\b(rd|st|ave|ln|dr|ct|cir|ter|pl|blvd|hwy)\\.?\\b/g,(value)=>expansions[value.replace(".","")]||value).split(/[^a-z0-9]+/).filter(Boolean).slice(0,4);const details=[];const seen=new Set();const keep=(url,img,index)=>{if(!url)return;const normalized=String(url).trim();const lower=normalized.toLowerCase();const alt=compact(img.alt||img.getAttribute("aria-label")||"");const altLower=alt.toLowerCase();const imageId=lower.match(/photos\\.zillowstatic\\.com\\/fp\\/([a-f0-9]+)-/);const key=imageId&&imageId[1]?sourceSite+":"+imageId[1]:normalized;if(!/^https?:\\/\\//i.test(normalized))return;if(seen.has(key))return;if(lower.includes("zillow_web")||lower.includes("z-logo")||lower.includes("staticmap")||lower.includes("app-store")||lower.includes("google-play")||lower.includes("footer-art")||lower.includes("/agents/")||lower.includes("agent"))return;if(sourceSite.includes("zillow")){if(!lower.includes("photos.zillowstatic.com/fp/"))return;const matchesTarget=tokens.length>0&&tokens.every((token)=>altLower.includes(token));if(!matchesTarget)return;}if(sourceSite.includes("realtor")&&!/rdcpix|realtor|move/i.test(lower))return;seen.add(key);details.push({url:normalized,alt,index});};Array.from(document.images).forEach((img,index)=>{keep(img.currentSrc||img.src,img,index);String(img.getAttribute("srcset")||"").split(",").map((part)=>part.trim().split(/\\s+/)[0]).forEach((url)=>keep(url,img,index));});const photoDetails=details.slice(0,40);const photoUrls=photoDetails.map((photo)=>photo.url);const special=text.match(/What's special\\s+([\\s\\S]*?)(?:Show more|\\d+\\s+(?:minute|hour|day|month)s?\\s+on\\s+Zillow|Facts & features|Listed by:|Source:)/i);const payload={pageUrl:location.href,title:document.title,sourceSite,addressFull,listingRemarks:compact(special&&special[1]?special[1]:""),photoDetails,photoUrls};fetch("http://localhost:3000/api/browser-capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then((response)=>{if(!response.ok)throw new Error("HTTP "+response.status);alert("Sent "+photoUrls.length+" photo URLs to RE Assistant.");}).catch(()=>{prompt("Capture failed. Copy this payload into RE Assistant if needed:",JSON.stringify(payload));});})();`;
+  const script = String.raw`(()=> {
+    const compact = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const text = document.body ? document.body.innerText : "";
+    const sourceSite = location.hostname.replace(/^www\./, "");
+    const addressPattern = /\d{1,6}[ \t]+[A-Za-z0-9 .'-]+?(?:Road|Rd\.?|Street|St\.?|Avenue|Ave\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Circle|Cir\.?|Trail|Terrace|Ter\.?|Way|Place|Pl\.?|Boulevard|Blvd\.?|Highway|Hwy\.?),\s*[A-Za-z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?/i;
+    const titleMatch = document.title.match(addressPattern);
+    const lineMatch = text.split(/\n+/).map(compact).find((line) => addressPattern.test(line));
+    const addressFull = compact(titleMatch ? titleMatch[0] : lineMatch || "");
+    const addressLine1 = compact(addressFull.split(",")[0] || "");
+    const expansions = {
+      rd: "road",
+      st: "street",
+      ave: "avenue",
+      ln: "lane",
+      dr: "drive",
+      ct: "court",
+      cir: "circle",
+      ter: "terrace",
+      pl: "place",
+      blvd: "boulevard",
+      hwy: "highway"
+    };
+    const tokens = addressLine1.toLowerCase()
+      .replace(/\b(rd|st|ave|ln|dr|ct|cir|ter|pl|blvd|hwy)\.?\b/g, (value) => expansions[value.replace(".", "")] || value)
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean)
+      .slice(0, 4);
+    const isRejectedAsset = (lower) => {
+      const path = lower.split(/[?#]/)[0];
+
+      return path.endsWith(".svg") ||
+      path.endsWith(".gif") ||
+      lower.includes("zillow_web") ||
+      lower.includes("z-logo") ||
+      lower.includes("staticmap") ||
+      lower.includes("app-store") ||
+      lower.includes("google-play") ||
+      lower.includes("footer-art") ||
+      lower.includes("static.rdc.moveaws.com") ||
+      lower.includes("/rdc-ui/") ||
+      lower.includes("/logos/") ||
+      lower.includes("/icons/") ||
+      lower.includes("/pictos/") ||
+      lower.includes("app-promotion") ||
+      lower.includes("download-badge") ||
+      lower.includes("vu-logo") ||
+      /^https?:\/\/p\.rdcpix\.com\//.test(lower) ||
+      lower.includes("/agents/") ||
+      lower.includes("agent");
+    };
+    const getPhotoKey = (lower, normalized) => {
+      const zillowId = lower.match(/photos\.zillowstatic\.com\/fp\/([a-f0-9]+)-/);
+      const realtorId = lower.match(/ap\.rdcpix\.com\/([^/?#]+?l-m\d+)(?:rd)?(?:-[^/?#]+)?\.(?:jpe?g|png|webp)/);
+
+      if (zillowId && zillowId[1]) return sourceSite + ":zillow:" + zillowId[1];
+      if (realtorId && realtorId[1]) return sourceSite + ":realtor:" + realtorId[1];
+
+      return normalized;
+    };
+    const details = [];
+    const seen = new Set();
+    const keep = (url, img, index) => {
+      if (!url) return;
+
+      const normalized = String(url).trim();
+      const lower = normalized.toLowerCase();
+      const alt = compact(img.alt || img.getAttribute("aria-label") || "");
+      const altLower = alt.toLowerCase();
+      const key = getPhotoKey(lower, normalized);
+
+      if (!/^https?:\/\//i.test(normalized)) return;
+      if (seen.has(key)) return;
+      if (isRejectedAsset(lower)) return;
+
+      if (sourceSite.includes("zillow")) {
+        if (!lower.includes("photos.zillowstatic.com/fp/")) return;
+
+        const matchesTarget = tokens.length > 0 && tokens.every((token) => altLower.includes(token));
+
+        if (!matchesTarget) return;
+      }
+
+      if (sourceSite.includes("realtor") && !lower.includes("ap.rdcpix.com/")) return;
+
+      seen.add(key);
+      details.push({ url: normalized, alt, index });
+    };
+
+    Array.from(document.images).forEach((img, index) => {
+      keep(img.currentSrc || img.src, img, index);
+      String(img.getAttribute("srcset") || "")
+        .split(",")
+        .map((part) => part.trim().split(/\s+/)[0])
+        .forEach((url) => keep(url, img, index));
+    });
+
+    const photoDetails = details.slice(0, 40);
+    const photoUrls = photoDetails.map((photo) => photo.url);
+    const special = text.match(/What's special\s+([\s\S]*?)(?:Show more|\d+\s+(?:minute|hour|day|month)s?\s+on\s+Zillow|Facts & features|Listed by:|Source:)/i);
+    const payload = {
+      pageUrl: location.href,
+      title: document.title,
+      sourceSite,
+      addressFull,
+      listingRemarks: compact(special && special[1] ? special[1] : ""),
+      photoDetails,
+      photoUrls
+    };
+
+    fetch("http://localhost:3000/api/browser-capture", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        alert("Sent " + photoUrls.length + " photo URLs to RE Assistant.");
+      })
+      .catch(() => {
+        prompt("Capture failed. Copy this payload into RE Assistant if needed:", JSON.stringify(payload));
+      });
+  })();`;
 
   return `javascript:${encodeURIComponent(script)}`;
 }

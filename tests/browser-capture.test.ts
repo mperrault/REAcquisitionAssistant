@@ -121,6 +121,73 @@ describe("browser capture", () => {
     ]);
   });
 
+  it("filters Realtor UI assets from browser captures", () => {
+    expect(
+      normalizePhotoUrls([
+        "https://static.rdc.moveaws.com/rdc-ui/logos/logo-brand.svg",
+        "https://static.rdc.moveaws.com/rdc-ui/icons/icon-magnifying-glass.svg",
+        "https://static.rdc.moveaws.com/rdc-ui/pictos/picto-app-promotion-bg.svg",
+        "https://static.rdc.moveaws.com/images/listing-detail/VU-logo-v3.svg",
+        "https://p.rdcpix.com/v01/od4aa0000-c0s.gif",
+        "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3204469273rd-w480_h360.webp"
+      ])
+    ).toEqual([
+      "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3204469273rd-w480_h360.webp"
+    ]);
+  });
+
+  it("dedupes Realtor image-size variants by listing photo id", () => {
+    expect(
+      normalizePhotoUrls([
+        "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3323093104rd-w960_h720.webp",
+        "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3323093104rd-w1280_h960.webp",
+        "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3924666281rd-w1280_h960.webp"
+      ])
+    ).toEqual([
+      "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3323093104rd-w960_h720.webp",
+      "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3924666281rd-w1280_h960.webp"
+    ]);
+  });
+
+  it("keeps only Realtor listing photos from captured image details", () => {
+    expect(
+      selectCapturePhotoUrls({
+        sourceSite: "realtor.com",
+        addressLine1: "15 Green St",
+        photoUrls: [],
+        photoDetails: [
+          {
+            url: "https://static.rdc.moveaws.com/rdc-ui/logos/logo-brand.svg",
+            alt: "realtor.com",
+            index: 0
+          },
+          {
+            url: "https://static.rdc.moveaws.com/rdc-ui/icons/icon-magnifying-glass.svg",
+            alt: "Search",
+            index: 1
+          },
+          {
+            url: "https://p.rdcpix.com/v01/od4aa0000-c0s.gif",
+            alt: "Andy Goodhall Photo",
+            index: 2
+          },
+          {
+            url: "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3323093104rd-w960_h720.webp",
+            alt: "white featured at 15 Green St, Stafford, CT 06076",
+            index: 3
+          },
+          {
+            url: "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3323093104rd-w1280_h960.webp",
+            alt: "",
+            index: 4
+          }
+        ]
+      })
+    ).toEqual([
+      "https://ap.rdcpix.com/aacf549986e65799097042e78a17ac5el-m3323093104rd-w960_h720.webp"
+    ]);
+  });
+
   it("keeps Zillow photos for the target listing and drops nearby homes", () => {
     expect(
       selectCapturePhotoUrls({

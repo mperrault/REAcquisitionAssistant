@@ -205,18 +205,46 @@ export function parseAddressParts(value: string) {
 
 function isNonPropertyPhotoUrl(url: string) {
   const normalized = url.toLowerCase();
+  const pathname = getUrlPathname(normalized);
 
   return (
     normalized.startsWith("data:") ||
+    pathname.endsWith(".svg") ||
+    pathname.endsWith(".gif") ||
     normalized.includes("z-logo") ||
     normalized.includes("zillow_web") ||
     normalized.includes("app-store-badge") ||
     normalized.includes("google-play-badge") ||
     normalized.includes("footer-art") ||
     normalized.includes("staticmap") ||
+    normalized.includes("static.rdc.moveaws.com") ||
+    normalized.includes("/rdc-ui/") ||
+    normalized.includes("/logos/") ||
+    normalized.includes("/icons/") ||
+    normalized.includes("/pictos/") ||
+    normalized.includes("app-promotion") ||
+    normalized.includes("download-badge") ||
+    normalized.includes("vu-logo") ||
+    getUrlHostname(normalized) === "p.rdcpix.com" ||
     normalized.includes("/agents/") ||
     normalized.includes("agent")
   );
+}
+
+function getUrlHostname(url: string) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function getUrlPathname(url: string) {
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch {
+    return url;
+  }
 }
 
 function getPhotoIdentity(url: string) {
@@ -224,6 +252,14 @@ function getPhotoIdentity(url: string) {
 
   if (zillowMatch?.[1]) {
     return `zillow:${zillowMatch[1]}`;
+  }
+
+  const realtorMatch = url.match(
+    /ap\.rdcpix\.com\/([^/?#]+?l-m\d+)(?:rd)?(?:-[^/?#]+)?\.(?:jpe?g|png|webp)/i
+  );
+
+  if (realtorMatch?.[1]) {
+    return `realtor:${realtorMatch[1].toLowerCase()}`;
   }
 
   return url;
