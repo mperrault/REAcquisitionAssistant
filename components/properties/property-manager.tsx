@@ -654,7 +654,19 @@ function formatScoreGapCount(count: number) {
   return `${count} ${count === 1 ? "score gap" : "score gaps"}`;
 }
 
+function getPropertyPhotoUrls(property: PropertyRecord) {
+  return Array.from(
+    new Set([
+      ...(property.primaryPhotoUrl ? [property.primaryPhotoUrl] : []),
+      ...property.photoUrls,
+      ...property.photoEvidence.map((photo) => photo.url)
+    ])
+  );
+}
+
 function createPropertyEnrichmentCandidate(property: PropertyRecord) {
+  const photoUrls = getPropertyPhotoUrls(property);
+
   return {
     id: property.id,
     listingUrl: property.listingUrl.trim(),
@@ -663,8 +675,8 @@ function createPropertyEnrichmentCandidate(property: PropertyRecord) {
     state: property.state,
     postalCode: property.postalCode,
     askingPrice: property.askingPrice,
-    primaryPhotoUrl: property.primaryPhotoUrl,
-    photoUrls: property.photoUrls,
+    primaryPhotoUrl: property.primaryPhotoUrl || photoUrls[0] || "",
+    photoUrls,
     houseStyle: property.houseStyle,
     listingRemarks: property.listingRemarks,
     inferStyle: true,
@@ -804,18 +816,24 @@ function mergeEnrichmentIntoProperty(
 ) {
   const shouldApplyPrice =
     property.askingPrice === null && enrichment.updates.askingPrice !== null;
+  const propertyPhotoUrls = getPropertyPhotoUrls(property);
+  const evidencePrimaryPhotoUrl =
+    property.primaryPhotoUrl || propertyPhotoUrls[0] || "";
   const shouldApplyPhoto =
-    !property.primaryPhotoUrl && Boolean(enrichment.updates.primaryPhotoUrl);
+    !evidencePrimaryPhotoUrl && Boolean(enrichment.updates.primaryPhotoUrl);
   const primaryPhotoUrl = shouldApplyPhoto
     ? enrichment.updates.primaryPhotoUrl
-    : property.primaryPhotoUrl;
+    : evidencePrimaryPhotoUrl;
   const photoUrls = Array.from(
     new Set([
       ...(primaryPhotoUrl ? [primaryPhotoUrl] : []),
       ...enrichment.updates.photoUrls,
-      ...property.photoUrls
+      ...propertyPhotoUrls
     ])
   );
+  const repairedPhotoReferences =
+    primaryPhotoUrl !== property.primaryPhotoUrl ||
+    property.photoEvidence.some((photo) => !property.photoUrls.includes(photo.url));
   const shouldApplyStyle =
     !property.houseStyle.trim() && Boolean(enrichment.updates.houseStyle);
   const styleFailureReason =
@@ -979,6 +997,8 @@ function mergeEnrichmentIntoProperty(
         : property.askingPrice,
       primaryPhotoUrl,
       photoUrls,
+      photoEvidence: property.photoEvidence,
+      sourceCaptures: property.sourceCaptures,
       houseStyle: shouldApplyStyle
         ? enrichment.updates.houseStyle
         : property.houseStyle,
@@ -990,6 +1010,7 @@ function mergeEnrichmentIntoProperty(
       shouldApplyPrice ? "price" : null,
       shouldApplyPhoto ? "photo" : null,
       shouldApplyStyle ? "style" : null,
+      repairedPhotoReferences ? "captured photos" : null,
       appliedSettingFacts > 0 ? "setting/view facts" : null,
       appliedSettingCoverageFacts > 0 ? "setting reviewed" : null,
       appliedRenovationScopes > 0 ? "renovation scope" : null,

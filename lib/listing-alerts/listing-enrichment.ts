@@ -146,7 +146,50 @@ export type ListingEnrichmentDiagnostic = EnrichmentDiagnostic;
 
 type EnrichmentOptions = {
   onDiagnostic?: (diagnostic: EnrichmentDiagnostic) => void;
+  signal?: AbortSignal;
 };
+
+function combineAbortSignals(
+  signals: Array<AbortSignal | undefined>
+): AbortSignal | undefined {
+  const activeSignals = signals.filter(Boolean) as AbortSignal[];
+
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+
+    signal.addEventListener("abort", abort, { once: true });
+  }
+
+  return controller.signal;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) {
+    return;
+  }
+
+  const error = new Error("Enrichment canceled.");
+  error.name = "AbortError";
+  throw error;
+}
 
 const styleDefinitions = [
   {
@@ -1133,7 +1176,8 @@ function mergeRenovationInferences(
 
 async function inferHouseStyleFromPhotos(
   photoUrls: string[],
-  fetcher: FetchLike
+  fetcher: FetchLike,
+  signal?: AbortSignal
 ): Promise<{ style: StyleInference | null; warning: string | null }> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   const imageUrls = getEligibleVisionImageUrls(photoUrls).slice(0, 3);
@@ -1155,6 +1199,7 @@ async function inferHouseStyleFromPhotos(
   async function requestStyle(imageUrlsForRequest: string[]) {
     const response = await fetcher("https://api.openai.com/v1/responses", {
       method: "POST",
+      signal,
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json"
@@ -1231,13 +1276,15 @@ async function inferStyleFromRequestEvidence({
   requestTextStyle,
   requestPhotoUrls,
   fetcher,
-  addDiagnostic
+  addDiagnostic,
+  signal
 }: {
   shouldInferStyle: boolean;
   requestTextStyle: StyleInference | null;
   requestPhotoUrls: string[];
   fetcher: FetchLike;
   addDiagnostic: ReturnType<typeof createDiagnosticRecorder>["add"];
+  signal?: AbortSignal;
 }): Promise<{ style: StyleInference | null; failureReason: string }> {
   if (!shouldInferStyle) {
     return { style: null, failureReason: "" };
@@ -1263,7 +1310,11 @@ async function inferStyleFromRequestEvidence({
     `Eligible photos: ${eligiblePhotoCount}`
   );
 
-  const photoInference = await inferHouseStyleFromPhotos(requestPhotoUrls, fetcher);
+  const photoInference = await inferHouseStyleFromPhotos(
+    requestPhotoUrls,
+    fetcher,
+    signal
+  );
 
   if (photoInference.style) {
     addDiagnostic(
@@ -1290,7 +1341,8 @@ async function inferStyleFromRequestEvidence({
 
 async function inferRenovationsFromPhotos(
   photoUrls: string[],
-  fetcher: FetchLike
+  fetcher: FetchLike,
+  signal?: AbortSignal
 ): Promise<{ renovation: RenovationInference | null; warning: string | null }> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   const imageUrls = getEligibleVisionImageUrls(photoUrls).slice(0, 8);
@@ -1316,6 +1368,7 @@ async function inferRenovationsFromPhotos(
   async function requestRenovation(imageUrlsForRequest: string[]) {
     const response = await fetcher("https://api.openai.com/v1/responses", {
       method: "POST",
+      signal,
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json"
@@ -1462,11 +1515,16 @@ function responseWarningIsNotImageSpecific(warning: string | null) {
 
 async function inferRenovationsSafelyFromPhotos(
   photoUrls: string[],
-  fetcher: FetchLike
+  fetcher: FetchLike,
+  signal?: AbortSignal
 ) {
   try {
-    return await inferRenovationsFromPhotos(photoUrls, fetcher);
+    return await inferRenovationsFromPhotos(photoUrls, fetcher, signal);
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw error;
+    }
+
     const message =
       error instanceof Error ? error.message : "photo inference failed";
 
@@ -1684,6 +1742,8 @@ export async function enrichListingCandidate(
   options: EnrichmentOptions = {}
 ): Promise<ListingCandidateEnrichmentResponse> {
   const parsedCandidate = requestCandidateSchema.parse(candidate);
+  const requestSignal = options.signal;
+  throwIfAborted(requestSignal);
   const listingUrl = validateFetchUrl(parsedCandidate.listingUrl);
   const fetchedAt = new Date().toISOString();
   const diagnosticRecorder = createDiagnosticRecorder(
@@ -1744,8 +1804,13 @@ export async function enrichListingCandidate(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
+  const listingFetchSignal = combineAbortSignals([
+    controller.signal,
+    requestSignal
+  ]);
 
   try {
+    throwIfAborted(requestSignal);
     addDiagnostic(
       "listing fetch",
       "started",
@@ -1753,7 +1818,7 @@ export async function enrichListingCandidate(
       listingUrl
     );
     const response = await fetcher(listingUrl, {
-      signal: controller.signal,
+      signal: listingFetchSignal,
       headers: {
         "User-Agent":
           "Mozilla/5.0 (compatible; REAcquisitionAssistant/0.1; +http://localhost)",
