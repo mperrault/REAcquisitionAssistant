@@ -244,7 +244,7 @@ function isTargetListingPhoto(
     return true;
   }
 
-  return !alt && url.includes("-cc_ft_") && photo.index < 8;
+  return false;
 }
 
 function getAddressTokens(addressLine1: string) {

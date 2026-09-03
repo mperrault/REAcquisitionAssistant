@@ -40,7 +40,8 @@ import {
 } from "@/lib/listing-alerts/listing-enrichment";
 import {
   type BrowserCaptureRecord,
-  browserCaptureListResponseSchema
+  browserCaptureListResponseSchema,
+  selectCapturePhotoUrls
 } from "@/lib/properties/browser-capture";
 import {
   PROPERTY_STORAGE_KEY,
@@ -308,7 +309,7 @@ function createPropertyDiagnostic(
 }
 
 function createBrowserCaptureBookmarklet() {
-  const script = `(()=>{const compact=(value)=>String(value||"").replace(/\\s+/g," ").trim();const text=document.body?document.body.innerText:"";const sourceSite=location.hostname.replace(/^www\\./,"");const addressPattern=/\\d{1,6}[ \\t]+[A-Za-z0-9 .'-]+?(?:Road|Rd\\.?|Street|St\\.?|Avenue|Ave\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Court|Ct\\.?|Circle|Cir\\.?|Trail|Terrace|Ter\\.?|Way|Place|Pl\\.?|Boulevard|Blvd\\.?|Highway|Hwy\\.?),\\s*[A-Za-z .'-]+,\\s*[A-Z]{2}\\s+\\d{5}(?:-\\d{4})?/i;const titleMatch=document.title.match(addressPattern);const lineMatch=text.split(/\\n+/).map(compact).find((line)=>addressPattern.test(line));const addressFull=compact(titleMatch?titleMatch[0]:lineMatch||"");const addressLine1=compact(addressFull.split(",")[0]||"");const expansions={rd:"road",st:"street",ave:"avenue",ln:"lane",dr:"drive",ct:"court",cir:"circle",ter:"terrace",pl:"place",blvd:"boulevard",hwy:"highway"};const tokens=addressLine1.toLowerCase().replace(/\\b(rd|st|ave|ln|dr|ct|cir|ter|pl|blvd|hwy)\\.?\\b/g,(value)=>expansions[value.replace(".","")]||value).split(/[^a-z0-9]+/).filter(Boolean).slice(0,4);const details=[];const seen=new Set();const keep=(url,img,index)=>{if(!url)return;const normalized=String(url).trim();const lower=normalized.toLowerCase();const alt=compact(img.alt||img.getAttribute("aria-label")||"");const altLower=alt.toLowerCase();const imageId=lower.match(/photos\\.zillowstatic\\.com\\/fp\\/([a-f0-9]+)-/);const key=imageId&&imageId[1]?sourceSite+":"+imageId[1]:normalized;if(!/^https?:\\/\\//i.test(normalized))return;if(seen.has(key))return;if(lower.includes("zillow_web")||lower.includes("z-logo")||lower.includes("staticmap")||lower.includes("app-store")||lower.includes("google-play")||lower.includes("footer-art")||lower.includes("/agents/")||lower.includes("agent"))return;if(sourceSite.includes("zillow")){if(!lower.includes("photos.zillowstatic.com/fp/"))return;const matchesTarget=tokens.length>0&&tokens.every((token)=>altLower.includes(token));const earlyHero=!altLower&&lower.includes("-cc_ft_")&&index<8;if(!matchesTarget&&!earlyHero)return;}if(sourceSite.includes("realtor")&&!/rdcpix|realtor|move/i.test(lower))return;seen.add(key);details.push({url:normalized,alt,index});};Array.from(document.images).forEach((img,index)=>{keep(img.currentSrc||img.src,img,index);String(img.getAttribute("srcset")||"").split(",").map((part)=>part.trim().split(/\\s+/)[0]).forEach((url)=>keep(url,img,index));});const photoDetails=details.slice(0,40);const photoUrls=photoDetails.map((photo)=>photo.url);const special=text.match(/What's special\\s+([\\s\\S]*?)(?:Show more|\\d+\\s+(?:minute|hour|day|month)s?\\s+on\\s+Zillow|Facts & features|Listed by:|Source:)/i);const payload={pageUrl:location.href,title:document.title,sourceSite,addressFull,listingRemarks:compact(special&&special[1]?special[1]:""),photoDetails,photoUrls};fetch("http://localhost:3000/api/browser-capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then((response)=>{if(!response.ok)throw new Error("HTTP "+response.status);alert("Sent "+photoUrls.length+" photo URLs to RE Assistant.");}).catch(()=>{prompt("Capture failed. Copy this payload into RE Assistant if needed:",JSON.stringify(payload));});})();`;
+  const script = `(()=>{const compact=(value)=>String(value||"").replace(/\\s+/g," ").trim();const text=document.body?document.body.innerText:"";const sourceSite=location.hostname.replace(/^www\\./,"");const addressPattern=/\\d{1,6}[ \\t]+[A-Za-z0-9 .'-]+?(?:Road|Rd\\.?|Street|St\\.?|Avenue|Ave\\.?|Lane|Ln\\.?|Drive|Dr\\.?|Court|Ct\\.?|Circle|Cir\\.?|Trail|Terrace|Ter\\.?|Way|Place|Pl\\.?|Boulevard|Blvd\\.?|Highway|Hwy\\.?),\\s*[A-Za-z .'-]+,\\s*[A-Z]{2}\\s+\\d{5}(?:-\\d{4})?/i;const titleMatch=document.title.match(addressPattern);const lineMatch=text.split(/\\n+/).map(compact).find((line)=>addressPattern.test(line));const addressFull=compact(titleMatch?titleMatch[0]:lineMatch||"");const addressLine1=compact(addressFull.split(",")[0]||"");const expansions={rd:"road",st:"street",ave:"avenue",ln:"lane",dr:"drive",ct:"court",cir:"circle",ter:"terrace",pl:"place",blvd:"boulevard",hwy:"highway"};const tokens=addressLine1.toLowerCase().replace(/\\b(rd|st|ave|ln|dr|ct|cir|ter|pl|blvd|hwy)\\.?\\b/g,(value)=>expansions[value.replace(".","")]||value).split(/[^a-z0-9]+/).filter(Boolean).slice(0,4);const details=[];const seen=new Set();const keep=(url,img,index)=>{if(!url)return;const normalized=String(url).trim();const lower=normalized.toLowerCase();const alt=compact(img.alt||img.getAttribute("aria-label")||"");const altLower=alt.toLowerCase();const imageId=lower.match(/photos\\.zillowstatic\\.com\\/fp\\/([a-f0-9]+)-/);const key=imageId&&imageId[1]?sourceSite+":"+imageId[1]:normalized;if(!/^https?:\\/\\//i.test(normalized))return;if(seen.has(key))return;if(lower.includes("zillow_web")||lower.includes("z-logo")||lower.includes("staticmap")||lower.includes("app-store")||lower.includes("google-play")||lower.includes("footer-art")||lower.includes("/agents/")||lower.includes("agent"))return;if(sourceSite.includes("zillow")){if(!lower.includes("photos.zillowstatic.com/fp/"))return;const matchesTarget=tokens.length>0&&tokens.every((token)=>altLower.includes(token));if(!matchesTarget)return;}if(sourceSite.includes("realtor")&&!/rdcpix|realtor|move/i.test(lower))return;seen.add(key);details.push({url:normalized,alt,index});};Array.from(document.images).forEach((img,index)=>{keep(img.currentSrc||img.src,img,index);String(img.getAttribute("srcset")||"").split(",").map((part)=>part.trim().split(/\\s+/)[0]).forEach((url)=>keep(url,img,index));});const photoDetails=details.slice(0,40);const photoUrls=photoDetails.map((photo)=>photo.url);const special=text.match(/What's special\\s+([\\s\\S]*?)(?:Show more|\\d+\\s+(?:minute|hour|day|month)s?\\s+on\\s+Zillow|Facts & features|Listed by:|Source:)/i);const payload={pageUrl:location.href,title:document.title,sourceSite,addressFull,listingRemarks:compact(special&&special[1]?special[1]:""),photoDetails,photoUrls};fetch("http://localhost:3000/api/browser-capture",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).then((response)=>{if(!response.ok)throw new Error("HTTP "+response.status);alert("Sent "+photoUrls.length+" photo URLs to RE Assistant.");}).catch(()=>{prompt("Capture failed. Copy this payload into RE Assistant if needed:",JSON.stringify(payload));});})();`;
 
   return `javascript:${encodeURIComponent(script)}`;
 }
@@ -383,7 +384,8 @@ async function readNdjsonStream<T>({
 }
 
 function createSourceCaptureSummary(
-  capture: BrowserCaptureRecord
+  capture: BrowserCaptureRecord,
+  photoCount = capture.photoUrls.length
 ): PropertySourceCapture {
   return {
     id: capture.id,
@@ -395,7 +397,7 @@ function createSourceCaptureSummary(
     city: capture.city,
     state: capture.state,
     postalCode: capture.postalCode,
-    photoCount: capture.photoUrls.length,
+    photoCount,
     remarksSnippet: capture.listingRemarks.slice(0, 500)
   };
 }
@@ -431,11 +433,27 @@ function captureMatchesProperty(
   );
 }
 
+function getFocusedCapturePhotoUrls(
+  capture: BrowserCaptureRecord,
+  property: PropertyRecord
+) {
+  if (!captureMatchesProperty(capture, property)) {
+    return [];
+  }
+
+  return selectCapturePhotoUrls({
+    sourceSite: capture.sourceSite,
+    addressLine1: property.addressLine1 || capture.addressLine1,
+    photoDetails: capture.photoDetails,
+    photoUrls: capture.photoUrls
+  });
+}
+
 function applyCaptureToProperty(
   property: PropertyRecord,
   capture: BrowserCaptureRecord
 ) {
-  const capturedPhotoUrls = Array.from(new Set(capture.photoUrls));
+  const capturedPhotoUrls = getFocusedCapturePhotoUrls(capture, property);
   const existingEvidenceUrls = new Set(
     property.photoEvidence.map((photo) => photo.url)
   );
@@ -464,10 +482,13 @@ function applyCaptureToProperty(
   )
     ? property.sourceCaptures.map((sourceCapture) =>
         sourceCapture.id === capture.id
-          ? createSourceCaptureSummary(capture)
+          ? createSourceCaptureSummary(capture, capturedPhotoUrls.length)
           : sourceCapture
       )
-    : [createSourceCaptureSummary(capture), ...property.sourceCaptures];
+    : [
+        createSourceCaptureSummary(capture, capturedPhotoUrls.length),
+        ...property.sourceCaptures
+      ];
 
   return {
     ...property,
@@ -1388,6 +1409,13 @@ export function PropertyManager() {
       return;
     }
 
+    const focusedPhotoUrls = getFocusedCapturePhotoUrls(capture, draft);
+
+    if (focusedPhotoUrls.length === 0) {
+      setCaptureStatus("No focused-property photos found for this capture");
+      return;
+    }
+
     const capturedProperty = applyCaptureToProperty(draft, capture);
     const nextPropertyState = upsertProperty(propertyState, capturedProperty);
     const persistedState = savePropertyState(window.localStorage, nextPropertyState);
@@ -1398,8 +1426,8 @@ export function PropertyManager() {
     setLoadSource("storage");
     setSaveStatus("Captured photos attached");
     setCaptureStatus(
-      `Attached ${capture.photoUrls.length} photo URL${
-        capture.photoUrls.length === 1 ? "" : "s"
+      `Attached ${focusedPhotoUrls.length} photo URL${
+        focusedPhotoUrls.length === 1 ? "" : "s"
       }`
     );
   }
@@ -2504,17 +2532,19 @@ function SourcesTab({
   const sourceWebsiteLabel = sourceListingUrl
     ? getSourceWebsiteLabel(sourceListingUrl)
     : "Source";
-  const sortedCaptures = React.useMemo(
+  const focusedCaptures = React.useMemo(
     () =>
-      [...browserCaptures].sort((a, b) => {
-        const aMatches = captureMatchesProperty(a, draft) ? 1 : 0;
-        const bMatches = captureMatchesProperty(b, draft) ? 1 : 0;
-
-        return (
-          bMatches - aMatches ||
-          new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime()
-        );
-      }),
+      browserCaptures
+        .filter((capture) => captureMatchesProperty(capture, draft))
+        .map((capture) => ({
+          capture,
+          photoUrls: getFocusedCapturePhotoUrls(capture, draft)
+        }))
+        .sort(
+          (a, b) =>
+            new Date(b.capture.capturedAt).getTime() -
+            new Date(a.capture.capturedAt).getTime()
+        ),
     [browserCaptures, draft]
   );
 
@@ -2629,35 +2659,28 @@ function SourcesTab({
             />
           </div>
 
-          {sortedCaptures.length === 0 ? (
+          {focusedCaptures.length === 0 ? (
             <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
-              No browser captures have been received by this dev server.
+              No browser captures match this property.
             </div>
           ) : (
             <div className="grid gap-3">
-              {sortedCaptures.map((capture) => {
-                const matches = captureMatchesProperty(capture, draft);
-
+              {focusedCaptures.map(({ capture, photoUrls }) => {
                 return (
                   <div
                     key={capture.id}
-                    className={cn(
-                      "rounded-md border bg-card p-3",
-                      matches ? "border-primary" : "border-border"
-                    )}
+                    className="rounded-md border border-primary bg-card p-3"
                   >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant={matches ? "success" : "outline"}>
-                            {matches ? "Address match" : "Review match"}
-                          </Badge>
+                          <Badge variant="success">Address match</Badge>
                           <Badge variant="outline">
                             {capture.sourceSite || "Unknown source"}
                           </Badge>
                           <Badge variant="outline">
-                            {capture.photoUrls.length} photo
-                            {capture.photoUrls.length === 1 ? "" : "s"}
+                            {photoUrls.length} focused photo
+                            {photoUrls.length === 1 ? "" : "s"}
                           </Badge>
                           <span className="text-xs text-muted-foreground">
                             {formatCaptureDateTime(capture.capturedAt)}
@@ -2686,37 +2709,40 @@ function SourcesTab({
                         type="button"
                         size="sm"
                         onClick={() => onAttachCapture(capture.id)}
+                        disabled={photoUrls.length === 0}
                       >
                         <Plus aria-hidden="true" />
                         Attach
                       </Button>
                     </div>
 
-                    {capture.photoUrls.length > 0 ? (
+                    {photoUrls.length > 0 ? (
                       <div className="mt-3 grid gap-2">
                         <div className="text-xs text-muted-foreground">
-                          Previewing {Math.min(capture.photoUrls.length, 12)} of{" "}
-                          {capture.photoUrls.length} captured photos.
+                          Showing all {photoUrls.length} focused-property
+                          photos.
                         </div>
-                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-                          {capture.photoUrls.slice(0, 12).map((photoUrl) => (
-                            <div
-                              key={photoUrl}
-                              className="relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-secondary"
-                            >
-                              <Image
-                                src={photoUrl}
-                                alt="Captured listing photo"
-                                fill
-                                sizes="160px"
-                                className="object-cover"
-                                loading="lazy"
-                                unoptimized
-                                referrerPolicy="no-referrer"
-                              />
+                        <div className="max-h-[30rem] overflow-y-auto rounded-md border border-border p-2">
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                            {photoUrls.map((photoUrl) => (
+                              <div
+                                key={photoUrl}
+                                className="relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-secondary"
+                              >
+                                <Image
+                                  src={photoUrl}
+                                  alt="Captured listing photo"
+                                  fill
+                                  sizes="160px"
+                                  className="object-cover"
+                                  loading="lazy"
+                                  unoptimized
+                                  referrerPolicy="no-referrer"
+                                />
+                              </div>
+                            ))}
                             </div>
-                          ))}
-                        </div>
+                          </div>
                       </div>
                     ) : null}
                   </div>

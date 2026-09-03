@@ -156,6 +156,28 @@ describe("browser capture", () => {
     ]);
   });
 
+  it("drops Zillow photos without address-matching alt text", () => {
+    expect(
+      selectCapturePhotoUrls({
+        sourceSite: "zillow.com",
+        addressLine1: "9 Schwanda Road",
+        photoUrls: [],
+        photoDetails: [
+          {
+            url: "https://photos.zillowstatic.com/fp/unknown-cc_ft_1344.webp",
+            alt: "",
+            index: 0
+          },
+          {
+            url: "https://photos.zillowstatic.com/fp/target-cc_ft_1344.webp",
+            alt: "1st image of 9 Schwanda Road",
+            index: 1
+          }
+        ]
+      })
+    ).toEqual(["https://photos.zillowstatic.com/fp/target-cc_ft_1344.webp"]);
+  });
+
   it("filters target listing photos from capture details on save", () => {
     const capture = createBrowserCaptureRecord(
       {
