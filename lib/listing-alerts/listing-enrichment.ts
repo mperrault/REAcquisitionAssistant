@@ -1226,6 +1226,68 @@ async function inferHouseStyleFromPhotos(
   };
 }
 
+async function inferStyleFromRequestEvidence({
+  shouldInferStyle,
+  requestTextStyle,
+  requestPhotoUrls,
+  fetcher,
+  addDiagnostic
+}: {
+  shouldInferStyle: boolean;
+  requestTextStyle: StyleInference | null;
+  requestPhotoUrls: string[];
+  fetcher: FetchLike;
+  addDiagnostic: ReturnType<typeof createDiagnosticRecorder>["add"];
+}): Promise<{ style: StyleInference | null; failureReason: string }> {
+  if (!shouldInferStyle) {
+    return { style: null, failureReason: "" };
+  }
+
+  if (requestTextStyle) {
+    addDiagnostic(
+      "style",
+      "success",
+      "House style was inferred.",
+      `${requestTextStyle.houseStyle} from ${requestTextStyle.source}; confidence ${requestTextStyle.confidence}`
+    );
+    return { style: requestTextStyle, failureReason: "" };
+  }
+
+  const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
+  addDiagnostic(
+    "style photos",
+    eligiblePhotoCount > 0 ? "started" : "skipped",
+    eligiblePhotoCount > 0
+      ? "Running photo style inference from saved candidate photos."
+      : "Photo style inference has no eligible saved photo URLs.",
+    `Eligible photos: ${eligiblePhotoCount}`
+  );
+
+  const photoInference = await inferHouseStyleFromPhotos(requestPhotoUrls, fetcher);
+
+  if (photoInference.style) {
+    addDiagnostic(
+      "style",
+      "success",
+      "House style was inferred.",
+      `${photoInference.style.houseStyle} from ${photoInference.style.source}; confidence ${photoInference.style.confidence}`
+    );
+    return { style: photoInference.style, failureReason: "" };
+  }
+
+  const failureReason = `listing text did not identify a style; ${
+    photoInference.warning ?? "photo inference did not produce a style"
+  }`;
+  addDiagnostic(
+    "style",
+    "warning",
+    "House style inference failed.",
+    failureReason
+  );
+
+  return { style: null, failureReason };
+}
+
 async function inferRenovationsFromPhotos(
   photoUrls: string[],
   fetcher: FetchLike
@@ -1708,15 +1770,16 @@ export async function enrichListingCandidate(
         `Listing page fetch failed with HTTP ${response.status}.`,
         "The app will use saved candidate photos and listing remarks when available."
       );
-      if (shouldFillStyleFromRequest && !requestTextStyle) {
+      const requestStyle = await inferStyleFromRequestEvidence({
+        shouldInferStyle: shouldFillStyleFromRequest,
+        requestTextStyle,
+        requestPhotoUrls,
+        fetcher,
+        addDiagnostic
+      });
+      if (requestStyle.failureReason) {
         warnings.push(
-          `House style inference failed: listing page fetch failed with HTTP ${response.status}.`
-        );
-        addDiagnostic(
-          "style",
-          "warning",
-          "House style was not inferred.",
-          `Listing page fetch failed with HTTP ${response.status}.`
+          `House style inference failed: ${requestStyle.failureReason}.`
         );
       }
       const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
@@ -1776,7 +1839,7 @@ export async function enrichListingCandidate(
         fetchedAt,
         updates: {
           ...emptyUpdates(),
-          ...getStyleUpdate(requestTextStyle),
+          ...getStyleUpdate(requestStyle.style),
           ...getSettingUpdate(
             addSettingCoverageFact(
               requestTextSetting,
@@ -1808,15 +1871,16 @@ export async function enrichListingCandidate(
         "Fetched listing page did not include candidate address.",
         "The app will avoid applying page-derived price or photo data."
       );
-      if (shouldFillStyleFromRequest && !requestTextStyle) {
+      const requestStyle = await inferStyleFromRequestEvidence({
+        shouldInferStyle: shouldFillStyleFromRequest,
+        requestTextStyle,
+        requestPhotoUrls,
+        fetcher,
+        addDiagnostic
+      });
+      if (requestStyle.failureReason) {
         warnings.push(
-          "House style inference failed: fetched listing page did not include the property address."
-        );
-        addDiagnostic(
-          "style",
-          "warning",
-          "House style was not inferred.",
-          "Fetched listing page did not include the property address."
+          `House style inference failed: ${requestStyle.failureReason}.`
         );
       }
       const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
@@ -1876,7 +1940,7 @@ export async function enrichListingCandidate(
         fetchedAt,
         updates: {
           ...emptyUpdates(),
-          ...getStyleUpdate(requestTextStyle),
+          ...getStyleUpdate(requestStyle.style),
           ...getSettingUpdate(
             addSettingCoverageFact(
               requestTextSetting,
@@ -2103,15 +2167,16 @@ export async function enrichListingCandidate(
       "The app will use saved candidate photos and listing remarks when available."
     );
 
-    if (shouldFillStyleFromRequest && !requestTextStyle) {
+    const requestStyle = await inferStyleFromRequestEvidence({
+      shouldInferStyle: shouldFillStyleFromRequest,
+      requestTextStyle,
+      requestPhotoUrls,
+      fetcher,
+      addDiagnostic
+    });
+    if (requestStyle.failureReason) {
       warnings.push(
-        `House style inference failed: listing page fetch failed: ${message}`
-      );
-      addDiagnostic(
-        "style",
-        "warning",
-        "House style was not inferred.",
-        `Listing page fetch failed: ${message}`
+        `House style inference failed: ${requestStyle.failureReason}.`
       );
     }
     const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
@@ -2171,7 +2236,7 @@ export async function enrichListingCandidate(
       fetchedAt,
       updates: {
         ...emptyUpdates(),
-        ...getStyleUpdate(requestTextStyle),
+        ...getStyleUpdate(requestStyle.style),
         ...getSettingUpdate(
           addSettingCoverageFact(
             requestTextSetting,

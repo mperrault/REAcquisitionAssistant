@@ -643,6 +643,65 @@ describe("listing page enrichment", () => {
     }
   });
 
+  it("uses existing listing photos for style inference when page fetch is rate limited", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const requestedUrls: string[] = [];
+
+    try {
+      const result = await enrichListingCandidate(
+        {
+          ...baseCandidate,
+          inferStyle: true,
+          primaryPhotoUrl:
+            "https://photos.zillowstatic.com/fp/existing-exterior-photo.jpg",
+          listingRemarks: "Detached home with a sunny yard."
+        },
+        async (input) => {
+          requestedUrls.push(input);
+
+          if (input.includes("api.openai.com")) {
+            return createJsonResponse({
+              output_text: JSON.stringify({
+                houseStyle: "Ranch",
+                confidence: 0.7,
+                evidence: "Single-story exterior form is visible."
+              })
+            });
+          }
+
+          return createFetchResponse("Too Many Requests", 429);
+        }
+      );
+
+      expect(requestedUrls.some((url) => url.includes("api.openai.com"))).toBe(
+        true
+      );
+      expect(result.warnings).toContain("Listing page fetch failed with HTTP 429.");
+      expect(result.warnings).not.toContain(
+        "House style inference failed: listing page fetch failed with HTTP 429."
+      );
+      expect(result.updates.houseStyle).toBe("Ranch");
+      expect(result.updates.styleFactKey).toBe("style.ranch");
+      expect(result.updates.styleSource).toBe("photo_inference");
+      expect(
+        result.diagnostics.some(
+          (item) =>
+            item.stage === "style photos" &&
+            item.status === "started" &&
+            item.message ===
+              "Running photo style inference from saved candidate photos."
+        )
+      ).toBe(true);
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
   it("returns an explicit warning when the listing page blocks fetches", async () => {
     const result = await enrichListingCandidate(baseCandidate, async () =>
       createFetchResponse("Too Many Requests", 429)
