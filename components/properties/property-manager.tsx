@@ -1237,6 +1237,9 @@ export function PropertyManager() {
   const [sortMode, setSortMode] =
     React.useState<PropertySortMode>("updated_desc");
   const [isEnrichingProperty, setIsEnrichingProperty] = React.useState(false);
+  const enrichmentAbortControllerRef =
+    React.useRef<AbortController | null>(null);
+  const enrichmentProgressEndRef = React.useRef<HTMLDivElement | null>(null);
   const [isCalculatingDriveTime, setIsCalculatingDriveTime] =
     React.useState(false);
   const [browserCaptures, setBrowserCaptures] = React.useState<
@@ -1354,6 +1357,14 @@ export function PropertyManager() {
       ) ?? null,
     [propertyState.properties, selectedPropertyId]
   );
+  React.useEffect(() => {
+    if (!isEnrichingProperty) {
+      return;
+    }
+
+    enrichmentProgressEndRef.current?.scrollIntoView({ block: "end" });
+  }, [draft?.enrichmentDiagnostics.length, isEnrichingProperty]);
+
   const activeProfile = React.useMemo(() => {
     if (!profileState) {
       return null;
@@ -1662,6 +1673,9 @@ export function PropertyManager() {
       setSaveStatus(diagnostic.message);
     };
 
+    const abortController = new AbortController();
+    enrichmentAbortControllerRef.current = abortController;
+
     setIsEnrichingProperty(true);
     setSaveStatus("Enriching");
     setActiveTab("diagnostics");
@@ -1677,6 +1691,7 @@ export function PropertyManager() {
           Accept: "application/x-ndjson",
           "Content-Type": "application/json"
         },
+        signal: abortController.signal,
         body: JSON.stringify({
           candidate: createPropertyEnrichmentCandidate(propertyDraft)
         })
@@ -1743,6 +1758,7 @@ export function PropertyManager() {
             headers: {
               "Content-Type": "application/json"
             },
+            signal: abortController.signal,
             body: JSON.stringify(
               createDriveTimeRequest(enrichedProperty, activeProfile)
             )
@@ -1884,6 +1900,19 @@ export function PropertyManager() {
       setSelectedPropertyId(enrichedProperty.id);
       setLoadSource("storage");
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        appendDiagnostic(
+          createPropertyDiagnostic(
+            "client",
+            "info",
+            "Enrichment canceled.",
+            "The in-progress enrichment request was stopped by the user."
+          )
+        );
+        setSaveStatus("Enrichment canceled");
+        return;
+      }
+
       appendDiagnostic(
         createPropertyDiagnostic(
           "client",
@@ -1892,8 +1921,20 @@ export function PropertyManager() {
         )
       );
     } finally {
+      if (enrichmentAbortControllerRef.current === abortController) {
+        enrichmentAbortControllerRef.current = null;
+      }
       setIsEnrichingProperty(false);
     }
+  }
+
+  function handleCancelEnrichment() {
+    if (!enrichmentAbortControllerRef.current) {
+      return;
+    }
+
+    setSaveStatus("Canceling enrichment");
+    enrichmentAbortControllerRef.current.abort();
   }
 
   async function handleCalculateDriveTime() {
@@ -2009,6 +2050,66 @@ export function PropertyManager() {
 
   return (
     <div className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-8">
+      {isEnrichingProperty && draft ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="enrichment-progress-title"
+            className="w-full max-w-2xl rounded-lg border border-border bg-card p-5 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="mb-2 flex items-center gap-2">
+                  <Sparkles className="size-5" aria-hidden="true" />
+                  <h2
+                    id="enrichment-progress-title"
+                    className="text-lg font-semibold"
+                  >
+                    Enriching property
+                  </h2>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  {formatAddress(draft)}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCancelEnrichment}
+              >
+                Cancel
+              </Button>
+            </div>
+
+            <div
+              className="mt-5 max-h-80 space-y-2 overflow-y-auto"
+              aria-live="polite"
+            >
+              {draft.enrichmentDiagnostics.slice(-8).map((diagnostic) => (
+                <div
+                  key={diagnostic.id}
+                  className="rounded-md border border-border bg-background p-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">{diagnostic.stage}</Badge>
+                    <span className="text-sm font-medium">
+                      {diagnostic.message}
+                    </span>
+                  </div>
+                  {diagnostic.detail ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {diagnostic.detail}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+              <div ref={enrichmentProgressEndRef} aria-hidden="true" />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-2">

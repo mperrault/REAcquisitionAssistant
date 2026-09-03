@@ -43,6 +43,7 @@ export async function POST(request: Request) {
 
           try {
             const result = await enrichListingCandidate(payload.candidate, fetch, {
+              signal: request.signal,
               onDiagnostic(diagnostic) {
                 send({ type: "diagnostic", diagnostic });
               }
