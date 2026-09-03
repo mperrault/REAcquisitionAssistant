@@ -56,6 +56,7 @@ export type PropertyFact = z.infer<typeof propertyFactSchema>;
 
 export const propertyPhotoEvidenceSourceTypeSchema = z.enum([
   "browser_capture",
+  "listing_page",
   "manual_url",
   "email_alert",
   "upload"

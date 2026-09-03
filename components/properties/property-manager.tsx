@@ -41,6 +41,7 @@ import {
 import {
   type BrowserCaptureRecord,
   browserCaptureListResponseSchema,
+  normalizePhotoUrls,
   selectCapturePhotoUrls
 } from "@/lib/properties/browser-capture";
 import {
@@ -405,7 +406,53 @@ function createBrowserCaptureBookmarklet() {
         .forEach((url) => keep(url, img, index));
     });
 
-    const photoDetails = details.slice(0, 40);
+    if (sourceSite.includes("realtor")) {
+      const visibleRealtorUrls = details
+        .map((photo) => photo.url)
+        .filter((url) => /ap\.rdcpix\.com\//i.test(url));
+      const familyCounts = new Map();
+
+      visibleRealtorUrls.forEach((url) => {
+        const match = String(url).match(
+          /ap\.rdcpix\.com\/([^/?#]+?)l-m\d+/i
+        );
+        if (!match || !match[1]) return;
+
+        const family = match[1].toLowerCase();
+        familyCounts.set(family, (familyCounts.get(family) || 0) + 1);
+      });
+
+      const dominantFamily = Array.from(familyCounts.entries())
+        .sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+
+      if (dominantFamily) {
+        const html = String(document.documentElement?.innerHTML || "")
+          .replace(/\\u002F/gi, "/")
+          .replace(/\\\//g, "/");
+        const embeddedMatches =
+          html.match(/https?:\/\/ap\.rdcpix\.com\/[^"'<>\\\s]+/gi) || [];
+
+        embeddedMatches.forEach((url, index) => {
+          const normalized = String(url)
+            .replace(/&amp;/g, "&")
+            .replace(/\\u0026/gi, "&")
+            .replace(/\\/g, "");
+          const familyMatch = normalized.match(
+            /ap\.rdcpix\.com\/([^/?#]+?)l-m\d+/i
+          );
+
+          if (familyMatch?.[1]?.toLowerCase() === dominantFamily) {
+            keep(
+              normalized,
+              { alt: "", getAttribute: () => "" },
+              10000 + index
+            );
+          }
+        });
+      }
+    }
+
+    const photoDetails = details.slice(0, 80);
     const photoUrls = photoDetails.map((photo) => photo.url);
     const special = text.match(/What's special\s+([\s\S]*?)(?:Show more|\d+\s+(?:minute|hour|day|month)s?\s+on\s+Zillow|Facts & features|Listed by:|Source:)/i);
     const payload = {
@@ -423,9 +470,19 @@ function createBrowserCaptureBookmarklet() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     })
-      .then((response) => {
+      .then(async (response) => {
         if (!response.ok) throw new Error("HTTP " + response.status);
-        alert("Sent " + photoUrls.length + " photo URLs to RE Assistant.");
+        const result = await response.json();
+        const accepted = Array.isArray(result?.capture?.photoUrls)
+          ? result.capture.photoUrls.length
+          : 0;
+        alert(
+          "RE Assistant capture complete: " +
+            photoUrls.length +
+            " candidate photo URLs detected, " +
+            accepted +
+            " unique property photos accepted."
+        );
       })
       .catch(() => {
         prompt("Capture failed. Copy this payload into RE Assistant if needed:", JSON.stringify(payload));
@@ -581,9 +638,17 @@ function applyCaptureToProperty(
   const newEvidence = capturedPhotoUrls
     .filter((url) => !existingEvidenceUrls.has(url))
     .map((url, index) => createPhotoEvidenceFromCapture(capture, url, index));
-  const photoUrls = Array.from(
-    new Set([...property.photoUrls, ...capturedPhotoUrls])
+  const combinedEvidence = [...newEvidence, ...property.photoEvidence];
+  const normalizedEvidenceUrls = new Set(
+    normalizePhotoUrls(combinedEvidence.map((photo) => photo.url))
   );
+  const photoEvidence = combinedEvidence.filter((photo) =>
+    normalizedEvidenceUrls.has(photo.url)
+  );
+  const photoUrls = normalizePhotoUrls([
+    ...property.photoUrls,
+    ...capturedPhotoUrls
+  ]);
   const primaryPhotoUrl = property.primaryPhotoUrl || photoUrls[0] || "";
   const diagnostics = [
     ...property.enrichmentDiagnostics,
@@ -625,7 +690,7 @@ function applyCaptureToProperty(
     listingRemarks: property.listingRemarks || capture.listingRemarks,
     primaryPhotoUrl,
     photoUrls,
-    photoEvidence: [...newEvidence, ...property.photoEvidence],
+    photoEvidence,
     sourceCaptures,
     enrichmentDiagnostics: diagnostics,
     updatedAt: capture.capturedAt
@@ -652,6 +717,37 @@ function getScoreBadgeVariant(
 
 function formatScoreGapCount(count: number) {
   return `${count} ${count === 1 ? "score gap" : "score gaps"}`;
+}
+
+function removeListingPagePhotoEvidence(
+  property: PropertyRecord
+): PropertyRecord {
+  const listingPageUrls = new Set(
+    property.photoEvidence
+      .filter((photo) => photo.sourceType === "listing_page")
+      .map((photo) => photo.url)
+  );
+
+  if (listingPageUrls.size === 0) {
+    return property;
+  }
+
+  const photoEvidence = property.photoEvidence.filter(
+    (photo) => photo.sourceType !== "listing_page"
+  );
+  const photoUrls = property.photoUrls.filter(
+    (url) => !listingPageUrls.has(url)
+  );
+  const primaryPhotoUrl = listingPageUrls.has(property.primaryPhotoUrl)
+    ? photoUrls[0] ?? photoEvidence[0]?.url ?? ""
+    : property.primaryPhotoUrl;
+
+  return {
+    ...property,
+    primaryPhotoUrl,
+    photoUrls,
+    photoEvidence
+  };
 }
 
 function getPropertyPhotoUrls(property: PropertyRecord) {
@@ -831,6 +927,7 @@ function mergeEnrichmentIntoProperty(
       ...propertyPhotoUrls
     ])
   );
+  const photoEvidence = property.photoEvidence;
   const repairedPhotoReferences =
     primaryPhotoUrl !== property.primaryPhotoUrl ||
     property.photoEvidence.some((photo) => !property.photoUrls.includes(photo.url));
@@ -997,7 +1094,7 @@ function mergeEnrichmentIntoProperty(
         : property.askingPrice,
       primaryPhotoUrl,
       photoUrls,
-      photoEvidence: property.photoEvidence,
+      photoEvidence,
       sourceCaptures: property.sourceCaptures,
       houseStyle: shouldApplyStyle
         ? enrichment.updates.houseStyle
@@ -1572,12 +1669,16 @@ export function PropertyManager() {
     const capturedProperty = applyCaptureToProperty(draft, capture);
     const nextPropertyState = upsertProperty(propertyState, capturedProperty);
     const persistedState = savePropertyState(window.localStorage, nextPropertyState);
+    const savedProperty =
+      persistedState.properties.find(
+        (property) => property.id === capturedProperty.id
+      ) ?? capturedProperty;
 
     setPropertyState(persistedState);
-    setDraft(cloneProperty(capturedProperty));
-    setSelectedPropertyId(capturedProperty.id);
+    setDraft(cloneProperty(savedProperty));
+    setSelectedPropertyId(savedProperty.id);
     setLoadSource("storage");
-    setSaveStatus("Captured photos attached");
+    setSaveStatus("Captured photos attached and saved");
     setCaptureStatus(
       `Attached ${focusedPhotoUrls.length} photo URL${
         focusedPhotoUrls.length === 1 ? "" : "s"
@@ -1651,7 +1752,7 @@ export function PropertyManager() {
       return;
     }
 
-    const propertyDraft = draft;
+    const propertyDraft = removeListingPagePhotoEvidence(draft);
     let diagnostics: PropertyEnrichmentDiagnostic[] = [
       createPropertyDiagnostic(
         "client",
@@ -1887,6 +1988,8 @@ export function PropertyManager() {
       );
       enrichedProperty = {
         ...enrichedProperty,
+        photoEvidence: enrichedProperty.photoEvidence,
+        sourceCaptures: enrichedProperty.sourceCaptures,
         enrichmentDiagnostics: diagnostics.slice(-80)
       };
       const nextPropertyState = upsertProperty(propertyState, enrichedProperty);
@@ -2061,7 +2164,7 @@ export function PropertyManager() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="mb-2 flex items-center gap-2">
-                  <Sparkles className="size-5" aria-hidden="true" />
+                  <RefreshCw className="size-5 animate-spin" aria-hidden="true" />
                   <h2
                     id="enrichment-progress-title"
                     className="text-lg font-semibold"

@@ -120,6 +120,34 @@ export function normalizePhotoUrls(urls: string[]) {
   return Array.from(photosByIdentity.values());
 }
 
+export function summarizeCapturePhotoSelection({
+  sourceSite,
+  addressLine1,
+  photoDetails,
+  photoUrls
+}: {
+  sourceSite: string;
+  addressLine1: string;
+  photoDetails: BrowserCapturePayload["photoDetails"];
+  photoUrls: string[];
+}) {
+  const detectedCount =
+    photoDetails.length > 0 ? photoDetails.length : photoUrls.length;
+  const acceptedUrls = selectCapturePhotoUrls({
+    sourceSite,
+    addressLine1,
+    photoDetails,
+    photoUrls
+  });
+
+  return {
+    detectedCount,
+    acceptedCount: acceptedUrls.length,
+    rejectedCount: Math.max(0, detectedCount - acceptedUrls.length),
+    acceptedUrls
+  };
+}
+
 export function selectCapturePhotoUrls({
   sourceSite,
   addressLine1,

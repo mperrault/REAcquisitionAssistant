@@ -416,8 +416,52 @@ function recordSettingInferenceDiagnostic(
   );
 }
 
+function getVisionPhotoKey(value: string) {
+  try {
+    const url = new URL(value);
+    const normalized = url.toString().toLowerCase();
+
+    const zillowPhotoId = normalized.match(
+      /photos\.zillowstatic\.com\/fp\/([a-f0-9]+)-/
+    );
+    if (zillowPhotoId?.[1]) {
+      return `zillow:${zillowPhotoId[1]}`;
+    }
+
+    const realtorPhotoId = normalized.match(
+      /ap\.rdcpix\.com\/([^/?#]+?l-m\d+)(?:rd)?(?:-[^/?#]+)?\.(?:jpe?g|png|webp)/
+    );
+    if (realtorPhotoId?.[1]) {
+      return `realtor:${realtorPhotoId[1]}`;
+    }
+
+    url.search = "";
+    url.hash = "";
+    return url.toString().toLowerCase();
+  } catch {
+    return value.trim().toLowerCase();
+  }
+}
+
 function getEligibleVisionImageUrls(photoUrls: string[]) {
-  return Array.from(new Set(photoUrls.filter(isEligibleVisionImageUrl)));
+  const seen = new Set<string>();
+  const eligibleUrls: string[] = [];
+
+  for (const photoUrl of photoUrls) {
+    if (!isEligibleVisionImageUrl(photoUrl)) {
+      continue;
+    }
+
+    const photoKey = getVisionPhotoKey(photoUrl);
+    if (seen.has(photoKey)) {
+      continue;
+    }
+
+    seen.add(photoKey);
+    eligibleUrls.push(photoUrl);
+  }
+
+  return eligibleUrls;
 }
 
 function getStyleUpdate(style: StyleInference | null) {
@@ -1848,6 +1892,7 @@ export async function enrichListingCandidate(
         );
       }
       const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
+      const analyzedPhotoCount = Math.min(eligiblePhotoCount, 8);
       if (shouldInferRenovation) {
         addDiagnostic(
           "renovation photos",
@@ -1855,7 +1900,9 @@ export async function enrichListingCandidate(
           eligiblePhotoCount > 0
             ? "Running photo renovation inference from saved candidate photos."
             : "Photo renovation inference has no eligible saved photo URLs.",
-          `Eligible photos: ${eligiblePhotoCount}`
+          eligiblePhotoCount > 0
+            ? `Analyzing ${analyzedPhotoCount} of ${eligiblePhotoCount} unique eligible saved photos.`
+            : "No eligible saved photos will be analyzed."
         );
       }
       const photoRenovation = shouldInferRenovation
@@ -1949,6 +1996,7 @@ export async function enrichListingCandidate(
         );
       }
       const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
+      const analyzedPhotoCount = Math.min(eligiblePhotoCount, 8);
       if (shouldInferRenovation) {
         addDiagnostic(
           "renovation photos",
@@ -1956,7 +2004,9 @@ export async function enrichListingCandidate(
           eligiblePhotoCount > 0
             ? "Running photo renovation inference from saved candidate photos."
             : "Photo renovation inference has no eligible saved photo URLs.",
-          `Eligible photos: ${eligiblePhotoCount}`
+          eligiblePhotoCount > 0
+            ? `Analyzing ${analyzedPhotoCount} of ${eligiblePhotoCount} unique eligible saved photos.`
+            : "No eligible saved photos will be analyzed."
         );
       }
       const photoRenovation = shouldInferRenovation
@@ -2023,24 +2073,19 @@ export async function enrichListingCandidate(
     const shouldFillPhoto = !parsedCandidate.primaryPhotoUrl;
     const shouldFillStyle =
       parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim();
-    const availablePhotoUrls = Array.from(
-      new Set([
-        ...metadata.photoUrls,
-        ...(parsedCandidate.primaryPhotoUrl
-          ? [parsedCandidate.primaryPhotoUrl]
-          : []),
-        ...parsedCandidate.photoUrls
-      ])
-    );
-    const eligiblePhotoCount = getEligibleVisionImageUrls(availablePhotoUrls).length;
+    const availablePhotoUrls = getEligibleVisionImageUrls(requestPhotoUrls);
+    const eligiblePhotoCount = availablePhotoUrls.length;
+    const analyzedPhotoCount = Math.min(eligiblePhotoCount, 8);
     if (shouldInferRenovation) {
       addDiagnostic(
         "renovation photos",
         eligiblePhotoCount > 0 ? "started" : "skipped",
         eligiblePhotoCount > 0
           ? "Running photo renovation inference."
-          : "Photo renovation inference has no eligible photo URLs.",
-        `Eligible photos: ${eligiblePhotoCount}. Total candidate/page photos: ${availablePhotoUrls.length}.`
+          : "Photo renovation inference has no eligible source photos.",
+        eligiblePhotoCount > 0
+          ? `Analyzing ${analyzedPhotoCount} of ${eligiblePhotoCount} photos shown in Sources.`
+          : "No photos shown in Sources are eligible for analysis."
       );
     }
     const photoRenovation = shouldInferRenovation
@@ -2099,8 +2144,8 @@ export async function enrichListingCandidate(
 
     const updates = {
       askingPrice: shouldFillPrice ? metadata.askingPrice : null,
-      primaryPhotoUrl: shouldFillPhoto ? (metadata.photoUrls[0] ?? "") : "",
-      photoUrls: shouldFillPhoto ? metadata.photoUrls : [],
+      primaryPhotoUrl: "",
+      photoUrls: [],
       ...getStyleUpdate(style),
       ...getSettingUpdate(
         addSettingCoverageFact(settingFacts, Boolean(pageText.trim()))
