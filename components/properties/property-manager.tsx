@@ -1960,6 +1960,13 @@ export function PropertyManager() {
     }
 
     const propertyDraft = draft;
+    const preservedPhotoUrls = getPropertyPhotoUrls(propertyDraft);
+    const preservedPhotoEvidence = propertyDraft.photoEvidence.map((photo) => ({
+      ...photo
+    }));
+    const preservedSourceCaptures = propertyDraft.sourceCaptures.map((capture) => ({
+      ...capture
+    }));
     const enrichmentCandidateProperty =
       removeListingPagePhotoEvidence(propertyDraft);
     let diagnostics: PropertyEnrichmentDiagnostic[] = [
@@ -2072,7 +2079,20 @@ export function PropertyManager() {
       }
 
       const merged = mergeEnrichmentIntoProperty(propertyDraft, enrichment);
-      let enrichedProperty = merged.property;
+      let enrichedProperty = {
+        ...merged.property,
+        primaryPhotoUrl:
+          propertyDraft.primaryPhotoUrl ||
+          merged.property.primaryPhotoUrl ||
+          preservedPhotoUrls[0] ||
+          "",
+        photoUrls: normalizePhotoUrls([
+          ...preservedPhotoUrls,
+          ...merged.property.photoUrls
+        ]),
+        photoEvidence: preservedPhotoEvidence,
+        sourceCaptures: preservedSourceCaptures
+      };
       const appliedFields = [...merged.appliedFields];
       const warnings = [...enrichment.warnings];
 

@@ -888,6 +888,24 @@ function inferRenovationScopeFromLineItem(
   };
 }
 
+function isRoutineMaintenanceOnlyLineItem(
+  item: z.infer<typeof renovationLineItemSchema>
+) {
+  const text = normalizeText(
+    `${item.label} ${item.evidence}`
+  ).toLowerCase();
+
+  const routineMaintenancePattern =
+    /\b(?:routine|preventive|maintenance|maintain|stain(?:ing)?|seal(?:ing)?|reseal|clean(?:ing)?|service|servicing|tune[-\s]?up|future|eventual|lifecycle|normal upkeep)\b/i;
+  const visibleDeficiencyPattern =
+    /\b(?:damaged|damage|rotted|rot|cracked|broken|peeling|worn|failed|failing|missing|unsafe|deteriorat|loose|sagging|leaking|repair needed|replacement needed|visible defect)\b/i;
+
+  return (
+    routineMaintenancePattern.test(text) &&
+    !visibleDeficiencyPattern.test(text)
+  );
+}
+
 function parseVisionRenovationInference(text: string): RenovationInference | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
@@ -932,38 +950,40 @@ function parseVisionRenovationInference(text: string): RenovationInference | nul
           facts.findIndex((item) => item.factKey === fact.factKey) === index
       );
     const rawLineItems = Array.isArray(parsed.lineItems) ? parsed.lineItems : [];
-    const lineItems = rawLineItems.flatMap((item) => {
-      if (!item || typeof item !== "object") {
-        return [];
-      }
-
-      const record = item as Record<string, unknown>;
-      const label =
-        typeof record.label === "string" ? normalizeText(record.label) : "";
-      const amount = parseCost(record.amount);
-      const confidence = parseConfidence(record.confidence);
-
-      if (!label || amount === null || confidence === null || confidence < 0.55) {
-        return [];
-      }
-
-      return [
-        {
-          factKey:
-            typeof record.factKey === "string" &&
-            record.factKey.startsWith("renovation.line_item.")
-              ? record.factKey
-              : `renovation.line_item.${slugFromLabel(label)}`,
-          label,
-          amount,
-          confidence,
-          evidence:
-            typeof record.evidence === "string"
-              ? normalizeText(record.evidence).slice(0, 240)
-              : "Visible in listing photos"
+    const lineItems = rawLineItems
+      .flatMap((item) => {
+        if (!item || typeof item !== "object") {
+          return [];
         }
-      ];
-    });
+
+        const record = item as Record<string, unknown>;
+        const label =
+          typeof record.label === "string" ? normalizeText(record.label) : "";
+        const amount = parseCost(record.amount);
+        const confidence = parseConfidence(record.confidence);
+
+        if (!label || amount === null || confidence === null || confidence < 0.55) {
+          return [];
+        }
+
+        return [
+          {
+            factKey:
+              typeof record.factKey === "string" &&
+              record.factKey.startsWith("renovation.line_item.")
+                ? record.factKey
+                : `renovation.line_item.${slugFromLabel(label)}`,
+            label,
+            amount,
+            confidence,
+            evidence:
+              typeof record.evidence === "string"
+                ? normalizeText(record.evidence).slice(0, 240)
+                : "Visible in listing photos"
+          }
+        ];
+      })
+      .filter((item) => !isRoutineMaintenanceOnlyLineItem(item));
     const derivedScopeFacts = lineItems
       .flatMap((lineItem) => {
         const derivedScope = inferRenovationScopeFromLineItem(lineItem);
@@ -973,13 +993,27 @@ function parseVisionRenovationInference(text: string): RenovationInference | nul
       .filter(
         (fact) => !scopeFacts.some((item) => item.factKey === fact.factKey)
       );
-    const expectedCost =
-      parseCost(parsed.expectedCost) ??
-      (lineItems.length > 0
+    const removedRoutineMaintenance =
+      rawLineItems.length > lineItems.length;
+    const retainedLineItemTotal =
+      lineItems.length > 0
         ? lineItems.reduce((total, item) => total + item.amount, 0)
-        : null);
-    const lowEstimate = parseCost(parsed.lowEstimate);
-    const highEstimate = parseCost(parsed.highEstimate);
+        : null;
+    const expectedCost = removedRoutineMaintenance
+      ? retainedLineItemTotal
+      : parseCost(parsed.expectedCost) ?? retainedLineItemTotal;
+    const lowEstimate =
+      removedRoutineMaintenance && expectedCost !== null
+        ? Math.round(expectedCost * 0.7)
+        : removedRoutineMaintenance
+          ? null
+          : parseCost(parsed.lowEstimate);
+    const highEstimate =
+      removedRoutineMaintenance && expectedCost !== null
+        ? Math.round(expectedCost * 1.4)
+        : removedRoutineMaintenance
+          ? null
+          : parseCost(parsed.highEstimate);
 
     if (scopeFacts.length === 0 && lineItems.length === 0 && expectedCost === null) {
       return null;
@@ -1514,9 +1548,14 @@ async function inferRenovationsFromPhotos(
                 type: "input_text",
                 text:
                   "Infer visible renovation needs from these real-estate listing photos only. " +
+                  "Include only work reasonably needed now or within about 24 months because of a visible deficiency, damage, material wear, functional problem, or clearly dated condition. " +
+                  "Do not create a cost merely because a component exists. Exclude routine preventive maintenance, normal ownership upkeep, future lifecycle reserves, and work that is merely optional. " +
+                  "For a new, recently replaced, or visibly good-condition deck/porch, do not include staining, sealing, cleaning, minor board replacement, or other maintenance unless the photos show a specific current deficiency. " +
+                  "Apply the same rule to roofs, siding, windows, HVAC, landscaping, paint, flooring, and other components: no immediate cost without evidence that work is actually warranted. " +
                   "Do not infer hidden defects, code issues, electrical, plumbing, structural, roof, or foundation work unless directly visible. " +
                   `Use only these scope fact keys: ${allowedScopes}. ` +
-                  "Return conservative ballpark USD costs for visible cosmetic and functional work. " +
+                  "Return conservative ballpark USD costs for the visible work that actually qualifies. " +
+                  "If nothing needs near-term work, return empty scopeFacts and lineItems with null cost estimates. " +
                   "Return only JSON with keys scopeFacts, lineItems, expectedCost, lowEstimate, highEstimate. " +
                   "scopeFacts must contain objects with factKey, confidence, evidence. " +
                   "lineItems must contain objects with label, amount, confidence, evidence."
