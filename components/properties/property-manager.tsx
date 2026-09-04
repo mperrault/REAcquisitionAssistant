@@ -547,8 +547,9 @@ export function createBrowserCaptureBookmarklet() {
       if (galleryRoot) {
         let consecutiveNoChange = 0;
         let previousKey = "";
+        const carouselSeen = new Set();
 
-        for (let step = 0; step < 45 && details.length < 40; step += 1) {
+        for (let step = 0; step < 80 && details.length < 80; step += 1) {
           const currentPhoto = getLargestVisibleZillowPhoto(galleryRoot);
 
           if (currentPhoto) {
@@ -556,6 +557,14 @@ export function createBrowserCaptureBookmarklet() {
             const normalized = src.trim();
             const key = getPhotoKey(normalized.toLowerCase(), normalized);
 
+            // Stop as soon as the carousel wraps to an image already visited
+            // during this traversal. The global seen set may already contain
+            // gallery images from the initial DOM scan, so use a local set.
+            if (carouselSeen.has(key)) {
+              break;
+            }
+
+            carouselSeen.add(key);
             keepZillowUrl(src, 10000 + step);
 
             if (key === previousKey) {
@@ -1881,15 +1890,25 @@ export function PropertyManager() {
     }
 
     const capturedProperty = applyCaptureToProperty(draft, capture);
+    const nextPropertyState = upsertProperty(propertyState, capturedProperty);
+    const persistedState = savePropertyState(
+      window.localStorage,
+      nextPropertyState
+    );
+    const savedProperty =
+      persistedState.properties.find(
+        (property) => property.id === capturedProperty.id
+      ) ?? capturedProperty;
 
-    // Importing capture data is an edit, not an implicit save.
-    // Keep it in the working draft so Save becomes enabled.
-    replaceDraft(capturedProperty);
-    setSelectedPropertyId(capturedProperty.id);
+    setPropertyState(persistedState);
+    setDraft(cloneProperty(savedProperty));
+    setSelectedPropertyId(savedProperty.id);
+    setLoadSource("storage");
+    setSaveStatus("Photos attached and saved");
     setCaptureStatus(
-      `Imported ${focusedPhotoUrls.length} photo URL${
+      `Attached and saved ${focusedPhotoUrls.length} photo URL${
         focusedPhotoUrls.length === 1 ? "" : "s"
-      } — click Save to persist`
+      }`
     );
   }
 

@@ -28,6 +28,9 @@ describe("browser capture bookmarklet source isolation", () => {
 
     expect(zillowBlock).toContain("galleryButton.click()");
     expect(zillowBlock).toContain("nextButton.click()");
+    expect(zillowBlock).toContain("const carouselSeen = new Set()");
+    expect(zillowBlock).toContain("carouselSeen.has(key)");
+    expect(zillowBlock).toContain("carouselSeen.add(key)");
   });
 
   it("does not click Realtor UI controls during capture", () => {
