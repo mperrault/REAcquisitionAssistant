@@ -371,6 +371,18 @@ function createBrowserCaptureBookmarklet() {
     };
     const details = [];
     const seen = new Set();
+    const blocked = new Set();
+    const isBrokerageMarketingAlt = (value) => {
+      const normalized = compact(value).toLowerCase();
+
+      return normalized.includes("brokerage logo") ||
+        normalized.includes("broker logo") ||
+        normalized.includes("company logo") ||
+        normalized.includes("realty professionals") ||
+        normalized.includes("home services") ||
+        normalized.includes("homeservices") ||
+        normalized.includes("berkshire hathaway");
+    };
     const keep = (url, img, index) => {
       if (!url) return;
 
@@ -381,6 +393,11 @@ function createBrowserCaptureBookmarklet() {
       const key = getPhotoKey(lower, normalized);
 
       if (!/^https?:\/\//i.test(normalized)) return;
+      if (isBrokerageMarketingAlt(alt)) {
+        blocked.add(key);
+        return;
+      }
+      if (blocked.has(key)) return;
       if (seen.has(key)) return;
       if (isRejectedAsset(lower)) return;
 
@@ -405,6 +422,19 @@ function createBrowserCaptureBookmarklet() {
         .map((part) => part.trim().split(/\s+/)[0])
         .forEach((url) => keep(url, img, index));
     });
+
+    if (blocked.size > 0) {
+      for (let index = details.length - 1; index >= 0; index -= 1) {
+        const photo = details[index];
+        const normalized = String(photo.url).trim();
+        const key = getPhotoKey(normalized.toLowerCase(), normalized);
+
+        if (blocked.has(key)) {
+          details.splice(index, 1);
+          seen.delete(key);
+        }
+      }
+    }
 
     if (sourceSite.includes("realtor")) {
       const visibleRealtorUrls = details

@@ -166,12 +166,24 @@ export function selectCapturePhotoUrls({
       index: photo.index ?? index
     }))
     .filter((photo) => photo.url);
+  const normalizedSourceSite = sourceSite.toLowerCase();
+  const blockedRealtorPhotoIdentities = new Set(
+    normalizedSourceSite.includes("realtor")
+      ? normalizedDetails
+          .filter((photo) => isLikelyBrokerageMarketingImage(photo.alt))
+          .map((photo) => getPhotoIdentity(photo.url))
+      : []
+  );
   const sourceUrls =
     normalizedDetails.length > 0
-      ? normalizedDetails.map((photo) => photo.url)
+      ? normalizedDetails
+          .map((photo) => photo.url)
+          .filter(
+            (url) =>
+              !blockedRealtorPhotoIdentities.has(getPhotoIdentity(url))
+          )
       : photoUrls;
   const normalizedUrls = normalizePhotoUrls(sourceUrls);
-  const normalizedSourceSite = sourceSite.toLowerCase();
 
   if (!normalizedSourceSite.includes("zillow")) {
     return normalizedUrls.slice(0, 80);
@@ -229,6 +241,24 @@ export function parseAddressParts(value: string) {
     state: (match[3] ?? "").toUpperCase(),
     postalCode: match[4] ?? ""
   };
+}
+
+function isLikelyBrokerageMarketingImage(alt: string) {
+  const normalized = compactWhitespace(alt).toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    normalized.includes("brokerage logo") ||
+    normalized.includes("broker logo") ||
+    normalized.includes("company logo") ||
+    normalized.includes("realty professionals") ||
+    normalized.includes("home services") ||
+    normalized.includes("homeservices") ||
+    normalized.includes("berkshire hathaway")
+  );
 }
 
 function isNonPropertyPhotoUrl(url: string) {

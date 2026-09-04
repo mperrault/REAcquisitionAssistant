@@ -149,6 +149,40 @@ describe("browser capture", () => {
     ]);
   });
 
+  it("filters Realtor brokerage branding and all of its CDN variants", () => {
+    const brandingSmall =
+      "https://ap.rdcpix.com/brandfamilyl-m100rd-w480_h360.webp";
+    const brandingLarge =
+      "https://ap.rdcpix.com/brandfamilyl-m100rd-w1280_h960.webp";
+    const propertyPhoto =
+      "https://ap.rdcpix.com/brandfamilyl-m101rd-w1280_h960.webp";
+
+    expect(
+      selectCapturePhotoUrls({
+        sourceSite: "realtor.com",
+        addressLine1: "47 High St",
+        photoUrls: [],
+        photoDetails: [
+          {
+            url: brandingSmall,
+            alt: "Berkshire Hathaway HomeServices Realty Professionals",
+            index: 0
+          },
+          {
+            url: brandingLarge,
+            alt: "",
+            index: 1
+          },
+          {
+            url: propertyPhoto,
+            alt: "47 High St, Stafford, CT 06076",
+            index: 2
+          }
+        ]
+      })
+    ).toEqual([propertyPhoto]);
+  });
+
   it("keeps only Realtor listing photos from captured image details", () => {
     expect(
       selectCapturePhotoUrls({
