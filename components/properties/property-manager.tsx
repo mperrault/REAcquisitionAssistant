@@ -666,8 +666,9 @@ function applyCaptureToProperty(
     property.photoEvidence.map((photo) => photo.url)
   );
   const newEvidence = capturedPhotoUrls
-    .filter((url) => !existingEvidenceUrls.has(url))
-    .map((url, index) => createPhotoEvidenceFromCapture(capture, url, index));
+    .map((url, index) => ({ url, index }))
+    .filter(({ url }) => !existingEvidenceUrls.has(url))
+    .map(({ url, index }) => createPhotoEvidenceFromCapture(capture, url, index));
   const combinedEvidence = [...newEvidence, ...property.photoEvidence];
   const normalizedEvidenceUrls = new Set(
     normalizePhotoUrls(combinedEvidence.map((photo) => photo.url))
@@ -2925,7 +2926,7 @@ function SourcesTab({
   );
 
   return (
-    <div className="grid gap-5">
+    <div className="grid min-w-0 max-w-full gap-5 overflow-hidden">
       <Section
         title="Source Listing"
         action={
@@ -3014,8 +3015,8 @@ function SourcesTab({
           </div>
         }
       >
-        <div className="grid gap-4">
-          <div className="grid gap-3 rounded-md border border-border bg-card p-3">
+        <div className="grid min-w-0 max-w-full gap-4">
+          <div className="grid min-w-0 max-w-full gap-3 overflow-hidden rounded-md border border-border bg-card p-3">
             <div className="flex flex-wrap items-center gap-3">
               <Camera className="size-4 text-muted-foreground" aria-hidden="true" />
               <div className="text-sm font-medium">Send to RE Assistant</div>
@@ -3030,7 +3031,7 @@ function SourcesTab({
               value={bookmarkletCode}
               readOnly
               rows={3}
-              className="font-mono text-xs"
+              className="w-full min-w-0 max-w-full resize-y font-mono text-xs"
               onFocus={(event) => event.currentTarget.select()}
             />
           </div>
@@ -3045,7 +3046,7 @@ function SourcesTab({
                 return (
                   <div
                     key={capture.id}
-                    className="rounded-md border border-primary bg-card p-3"
+                    className="min-w-0 max-w-full overflow-hidden rounded-md border border-primary bg-card p-3"
                   >
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0">
@@ -3098,8 +3099,8 @@ function SourcesTab({
                           Showing all {photoUrls.length} focused-property
                           photos.
                         </div>
-                        <div className="max-h-[30rem] overflow-y-auto rounded-md border border-border p-2">
-                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+                        <div className="max-h-[24rem] max-w-full overflow-auto overscroll-contain rounded-md border border-border p-2">
+                          <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                             {photoUrls.map((photoUrl) => (
                               <div
                                 key={photoUrl}
@@ -3153,8 +3154,9 @@ function SourcesTab({
             No captured photo evidence is attached to this property.
           </div>
         ) : (
-          <div className="grid gap-3">
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+          <div className="grid min-w-0 max-w-full gap-3">
+            <div className="max-h-[60vh] max-w-full overflow-y-auto overflow-x-hidden overscroll-contain rounded-md border border-border p-2">
+              <div className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
               {draft.photoEvidence.map((photo) => (
                 <div
                   key={photo.id}
@@ -3182,6 +3184,7 @@ function SourcesTab({
                   </div>
                 </div>
               ))}
+              </div>
             </div>
 
             {draft.sourceCaptures.length > 0 ? (
