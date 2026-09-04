@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 import type { ListingCandidate } from "@/lib/listing-alerts/types";
+import {
+  getRealtorListingAddressHint,
+  listingUrlAddressMatches,
+  normalizeListingUrl
+} from "@/lib/listing-alerts/listing-url";
 
 const requestCandidateSchema = z.object({
   id: z.string().min(1),
@@ -1452,7 +1457,16 @@ function mergeRenovationPhotoBatchResults(
 async function inferRenovationsFromPhotos(
   photoUrls: string[],
   fetcher: FetchLike,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (progress: {
+    batchNumber: number;
+    totalBatches: number;
+    processedPhotos: number;
+    totalPhotos: number;
+    batchPhotoCount: number;
+    status: "started" | "success" | "warning";
+    detail: string;
+  }) => void
 ): Promise<{ renovation: RenovationInference | null; warning: string | null }> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   const imageUrls = getEligibleVisionImageUrls(photoUrls);
@@ -1565,16 +1579,48 @@ async function inferRenovationsFromPhotos(
 
   const batchResults: RenovationInference[] = [];
   const warnings: string[] = [];
+  const totalBatches = Math.ceil(imageUrls.length / batchSize);
 
   for (let index = 0; index < imageUrls.length; index += batchSize) {
     throwIfAborted(signal);
     const batch = imageUrls.slice(index, index + batchSize);
+    const batchNumber = Math.floor(index / batchSize) + 1;
+
+    onProgress?.({
+      batchNumber,
+      totalBatches,
+      processedPhotos: index,
+      totalPhotos: imageUrls.length,
+      batchPhotoCount: batch.length,
+      status: "started",
+      detail: `Starting batch ${batchNumber} of ${totalBatches}: ${batch.length} photo${batch.length === 1 ? "" : "s"}.`
+    });
+
     const result = await analyzeBatch(batch);
+    const processedPhotos = Math.min(index + batch.length, imageUrls.length);
 
     if (result.renovation) {
       batchResults.push(result.renovation);
+      onProgress?.({
+        batchNumber,
+        totalBatches,
+        processedPhotos,
+        totalPhotos: imageUrls.length,
+        batchPhotoCount: batch.length,
+        status: "success",
+        detail: `Batch ${batchNumber} of ${totalBatches} complete — ${processedPhotos}/${imageUrls.length} photos processed.`
+      });
     } else if (result.warning) {
       warnings.push(result.warning);
+      onProgress?.({
+        batchNumber,
+        totalBatches,
+        processedPhotos,
+        totalPhotos: imageUrls.length,
+        batchPhotoCount: batch.length,
+        status: "warning",
+        detail: `Batch ${batchNumber} of ${totalBatches} completed with a warning — ${processedPhotos}/${imageUrls.length} photos processed. ${result.warning}`
+      });
     }
   }
 
@@ -1659,10 +1705,16 @@ function responseWarningIsNotImageSpecific(warning: string | null) {
 async function inferRenovationsSafelyFromPhotos(
   photoUrls: string[],
   fetcher: FetchLike,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: Parameters<typeof inferRenovationsFromPhotos>[3]
 ) {
   try {
-    return await inferRenovationsFromPhotos(photoUrls, fetcher, signal);
+    return await inferRenovationsFromPhotos(
+      photoUrls,
+      fetcher,
+      signal,
+      onProgress
+    );
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       throw error;
@@ -1887,7 +1939,13 @@ export async function enrichListingCandidate(
   const parsedCandidate = requestCandidateSchema.parse(candidate);
   const requestSignal = options.signal;
   throwIfAborted(requestSignal);
-  const listingUrl = validateFetchUrl(parsedCandidate.listingUrl);
+  const normalizedListingUrl = normalizeListingUrl(parsedCandidate.listingUrl);
+  const listingUrl = validateFetchUrl(normalizedListingUrl.canonicalUrl);
+  const listingUrlAddressMatch = listingUrlAddressMatches(
+    parsedCandidate.addressLine1,
+    listingUrl
+  );
+  const listingUrlAddressHint = getRealtorListingAddressHint(listingUrl);
   const fetchedAt = new Date().toISOString();
   const diagnosticRecorder = createDiagnosticRecorder(
     fetchedAt,
@@ -1896,6 +1954,47 @@ export async function enrichListingCandidate(
   const { diagnostics } = diagnosticRecorder;
   const addDiagnostic = diagnosticRecorder.add;
   const warnings: string[] = [];
+
+  if (normalizedListingUrl.wasNormalized) {
+    addDiagnostic(
+      "listing url",
+      "info",
+      "Canonicalized listing URL.",
+      `${normalizedListingUrl.originalUrl} -> ${listingUrl}`
+    );
+  } else if (normalizedListingUrl.warning) {
+    warnings.push(normalizedListingUrl.warning);
+    addDiagnostic(
+      "listing url",
+      "warning",
+      normalizedListingUrl.warning,
+      normalizedListingUrl.originalUrl
+    );
+  }
+
+  if (listingUrlAddressHint && listingUrlAddressMatch !== true) {
+    const mismatchWarning =
+      "Listing URL address does not match candidate property address.";
+    warnings.push(mismatchWarning);
+    addDiagnostic(
+      "listing url",
+      "failed",
+      "Enrichment blocked because listing URL address does not match property.",
+      `Candidate: ${parsedCandidate.addressLine1}. URL address: ${
+        listingUrlAddressHint?.addressLine1 ?? "unknown"
+      }. No listing fetch, photo inference, renovation inference, or page-derived updates were performed.`
+    );
+
+    return listingCandidateEnrichmentResponseSchema.parse({
+      candidateId: parsedCandidate.id,
+      listingUrl,
+      fetchedAt,
+      updates: emptyUpdates(),
+      warnings,
+      diagnostics
+    });
+  }
+
   const shouldFillStyleFromRequest =
     parsedCandidate.inferStyle && !parsedCandidate.houseStyle.trim();
   const shouldInferRenovation = parsedCandidate.inferRenovation;
@@ -2007,7 +2106,22 @@ export async function enrichListingCandidate(
         );
       }
       const photoRenovation = shouldInferRenovation
-        ? await inferRenovationsSafelyFromPhotos(requestPhotoUrls, fetcher)
+        ? await inferRenovationsSafelyFromPhotos(
+            requestPhotoUrls,
+            fetcher,
+            requestSignal,
+            (progress) =>
+              addDiagnostic(
+                "renovation batch",
+                progress.status,
+                progress.status === "started"
+                  ? `Processing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                  : progress.status === "success"
+                    ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
+                    : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
+                progress.detail
+              )
+          )
         : null;
       const renovation = mergeRenovationInferences(
         photoRenovation?.renovation ?? null,
@@ -2076,8 +2190,15 @@ export async function enrichListingCandidate(
       }.`
     );
 
-    if (!pageMatchesCandidate(parsedCandidate, metadata)) {
-      warnings.push("Fetched listing page did not include candidate address.");
+    if (
+      listingUrlAddressMatch === false ||
+      !pageMatchesCandidate(parsedCandidate, metadata)
+    ) {
+      if (
+        !warnings.includes("Fetched listing page did not include candidate address.")
+      ) {
+        warnings.push("Fetched listing page did not include candidate address.");
+      }
       addDiagnostic(
         "listing fetch",
         "warning",
@@ -2111,7 +2232,22 @@ export async function enrichListingCandidate(
         );
       }
       const photoRenovation = shouldInferRenovation
-        ? await inferRenovationsSafelyFromPhotos(requestPhotoUrls, fetcher)
+        ? await inferRenovationsSafelyFromPhotos(
+            requestPhotoUrls,
+            fetcher,
+            requestSignal,
+            (progress) =>
+              addDiagnostic(
+                "renovation batch",
+                progress.status,
+                progress.status === "started"
+                  ? `Processing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                  : progress.status === "success"
+                    ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
+                    : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
+                progress.detail
+              )
+          )
         : null;
       const renovation = mergeRenovationInferences(
         photoRenovation?.renovation ?? null,
@@ -2190,7 +2326,22 @@ export async function enrichListingCandidate(
       );
     }
     const photoRenovation = shouldInferRenovation
-      ? await inferRenovationsSafelyFromPhotos(availablePhotoUrls, fetcher)
+      ? await inferRenovationsSafelyFromPhotos(
+          availablePhotoUrls,
+          fetcher,
+          requestSignal,
+          (progress) =>
+            addDiagnostic(
+              "renovation batch",
+              progress.status,
+              progress.status === "started"
+                ? `Processing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                : progress.status === "success"
+                  ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
+                  : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
+              progress.detail
+            )
+        )
       : null;
     const textRenovation = shouldInferRenovation
       ? inferRenovationFromText(

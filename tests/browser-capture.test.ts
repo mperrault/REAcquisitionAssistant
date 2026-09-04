@@ -310,4 +310,21 @@ describe("browser capture", () => {
       "https://photos.zillowstatic.com/fp/target-cc_ft_1344.webp"
     ]);
   });
+  it("keeps embedded Zillow listing photos even when only a few are visible", () => {
+    const photos = Array.from({ length: 40 }, (_, index) => ({
+      url: `https://photos.zillowstatic.com/fp/${String(index + 1).padStart(8, "0")}abcdef-${index + 1}-uncropped_scaled_within_1536_1152.webp`,
+      alt: "47 High Street, Stafford, CT",
+      index
+    }));
+
+    expect(
+      selectCapturePhotoUrls({
+        sourceSite: "zillow.com",
+        addressLine1: "47 High Street",
+        photoUrls: photos.map((photo) => photo.url),
+        photoDetails: photos
+      })
+    ).toHaveLength(40);
+  });
+
 });

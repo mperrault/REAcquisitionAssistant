@@ -815,4 +815,49 @@ describe("listing page enrichment", () => {
       "Listing page fetch failed with HTTP 429."
     );
   });
+  it("blocks enrichment when the Realtor URL house number does not match the property", async () => {
+    let fetchCalls = 0;
+
+    const result = await enrichListingCandidate(
+      {
+        ...baseCandidate,
+        addressLine1: "38 Furnace Ave",
+        city: "Stafford",
+        state: "CT",
+        postalCode: "06076",
+        listingUrl:
+          "https://www.realtor.com/realestateandhomes-detail/138-Furnace-Ave_Stafford-Spgs_CT_06076_M45724-77139",
+        primaryPhotoUrl:
+          "https://ap.rdcpix.com/examplel-m1rd-w960_h720",
+        photoUrls: [
+          "https://ap.rdcpix.com/examplel-m1rd-w960_h720",
+          "https://ap.rdcpix.com/examplel-m2rd-w960_h720"
+        ],
+        inferStyle: true,
+        inferRenovation: true
+      },
+      async () => {
+        fetchCalls += 1;
+        return createFetchResponse("<html></html>");
+      }
+    );
+
+    expect(fetchCalls).toBe(0);
+    expect(result.updates.renovationScopeFacts).toEqual([]);
+    expect(result.updates.renovationLineItems).toEqual([]);
+    expect(result.updates.renovationExpectedCost).toBeNull();
+    expect(result.warnings).toContain(
+      "Listing URL address does not match candidate property address."
+    );
+    expect(
+      result.diagnostics.some(
+        (item) =>
+          item.stage === "listing url" &&
+          item.status === "failed" &&
+          item.message ===
+            "Enrichment blocked because listing URL address does not match property."
+      )
+    ).toBe(true);
+  });
+
 });

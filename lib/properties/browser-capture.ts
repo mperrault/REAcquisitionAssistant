@@ -196,7 +196,7 @@ export function selectCapturePhotoUrls({
   const addressTokens = getAddressTokens(addressLine1);
 
   if (addressTokens.length === 0) {
-    return normalizedUrls.slice(0, 12);
+    return normalizedUrls.slice(0, 40);
   }
 
   const acceptedUrls = normalizedDetails

@@ -38,6 +38,7 @@ import {
   listingCandidateEnrichmentResponseSchema,
   type ListingCandidateEnrichmentResponse
 } from "@/lib/listing-alerts/listing-enrichment";
+import { normalizeListingUrl } from "@/lib/listing-alerts/listing-url";
 import {
   type BrowserCaptureRecord,
   browserCaptureListResponseSchema,
@@ -309,9 +310,10 @@ function createPropertyDiagnostic(
   };
 }
 
-function createBrowserCaptureBookmarklet() {
-  const script = String.raw`(()=> {
+export function createBrowserCaptureBookmarklet() {
+  const script = String.raw`(async()=> {
     const compact = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const text = document.body ? document.body.innerText : "";
     const sourceSite = location.hostname.replace(/^www\./, "");
     const addressPattern = /\d{1,6}[ \t]+[A-Za-z0-9 .'-]+?(?:Road|Rd\.?|Street|St\.?|Avenue|Ave\.?|Lane|Ln\.?|Drive|Dr\.?|Court|Ct\.?|Circle|Cir\.?|Trail|Terrace|Ter\.?|Way|Place|Pl\.?|Boulevard|Blvd\.?|Highway|Hwy\.?),\s*[A-Za-z .'-]+,\s*[A-Z]{2}\s+\d{5}(?:-\d{4})?/i;
@@ -415,13 +417,169 @@ function createBrowserCaptureBookmarklet() {
       details.push({ url: normalized, alt, index });
     };
 
-    Array.from(document.images).forEach((img, index) => {
-      keep(img.currentSrc || img.src, img, index);
-      String(img.getAttribute("srcset") || "")
-        .split(",")
-        .map((part) => part.trim().split(/\s+/)[0])
-        .forEach((url) => keep(url, img, index));
-    });
+    const scanDocumentImages = () => {
+      Array.from(document.images).forEach((img, index) => {
+        keep(img.currentSrc || img.src, img, index);
+        String(img.getAttribute("srcset") || "")
+          .split(",")
+          .map((part) => part.trim().split(/\s+/)[0])
+          .forEach((url) => keep(url, img, index));
+      });
+    };
+
+    const keepZillowUrl = (url, index) => {
+      if (!url) return;
+
+      const normalized = String(url)
+        .replace(/&amp;/g, "&")
+        .replace(/\\u0026/gi, "&")
+        .replace(/\\/g, "")
+        .trim();
+      const lower = normalized.toLowerCase();
+      const key = getPhotoKey(lower, normalized);
+
+      if (!/^https?:\/\//i.test(normalized)) return;
+      if (!lower.includes("photos.zillowstatic.com/fp/")) return;
+      if (isRejectedAsset(lower)) return;
+      if (blocked.has(key) || seen.has(key)) return;
+
+      seen.add(key);
+      details.push({
+        url: normalized,
+        alt: addressLine1,
+        index
+      });
+    };
+
+    const getVisibleZillowGalleryRoot = () => {
+      const candidates = Array.from(
+        document.querySelectorAll('[role="dialog"], [aria-modal="true"]')
+      ).filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width >= 500 && rect.height >= 300;
+      });
+
+      return candidates[0] || null;
+    };
+
+    const getLargestVisibleZillowPhoto = (root) => {
+      if (!root) return null;
+
+      const candidates = Array.from(root.querySelectorAll("img"))
+        .filter((img) => {
+          const src = String(img.currentSrc || img.src || "");
+          if (!src.toLowerCase().includes("photos.zillowstatic.com/fp/")) {
+            return false;
+          }
+
+          if (!img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) {
+            return false;
+          }
+
+          const rect = img.getBoundingClientRect();
+          const visible =
+            rect.width >= 250 &&
+            rect.height >= 180 &&
+            rect.bottom > 0 &&
+            rect.right > 0 &&
+            rect.top < window.innerHeight &&
+            rect.left < window.innerWidth;
+
+          return visible;
+        })
+        .map((img) => ({
+          img,
+          area: img.getBoundingClientRect().width * img.getBoundingClientRect().height
+        }))
+        .sort((a, b) => b.area - a.area);
+
+      return candidates[0]?.img || null;
+    };
+
+    const findZillowNextButton = (root) => {
+      if (!root) return null;
+
+      const buttons = Array.from(root.querySelectorAll("button, [role='button']"));
+
+      return buttons.find((element) => {
+        const label = compact(
+          element.getAttribute("aria-label") ||
+            element.getAttribute("title") ||
+            element.textContent ||
+            ""
+        ).toLowerCase();
+
+        if (!label) return false;
+
+        return (
+          label === "next" ||
+          label.includes("next photo") ||
+          label.includes("next image") ||
+          label.includes("next slide")
+        );
+      }) || null;
+    };
+
+    scanDocumentImages();
+
+    if (sourceSite.includes("zillow") && details.length < 40) {
+      const galleryButton = Array.from(
+        document.querySelectorAll("button, a, [role='button']")
+      ).find((element) => {
+        const label = compact(
+          element.innerText ||
+            element.textContent ||
+            element.getAttribute("aria-label") ||
+            ""
+        );
+
+        return /(?:see|view|show)\s+(?:all\s+)?\d+\s+photos?/i.test(label) ||
+          /^\s*\d+\s+photos?\s*$/i.test(label);
+      });
+
+      if (galleryButton && typeof galleryButton.click === "function") {
+        galleryButton.click();
+        await sleep(1000);
+      }
+
+      const galleryRoot = getVisibleZillowGalleryRoot();
+
+      if (galleryRoot) {
+        let consecutiveNoChange = 0;
+        let previousKey = "";
+
+        for (let step = 0; step < 45 && details.length < 40; step += 1) {
+          const currentPhoto = getLargestVisibleZillowPhoto(galleryRoot);
+
+          if (currentPhoto) {
+            const src = String(currentPhoto.currentSrc || currentPhoto.src || "");
+            const normalized = src.trim();
+            const key = getPhotoKey(normalized.toLowerCase(), normalized);
+
+            keepZillowUrl(src, 10000 + step);
+
+            if (key === previousKey) {
+              consecutiveNoChange += 1;
+            } else {
+              consecutiveNoChange = 0;
+              previousKey = key;
+            }
+          }
+
+          const nextButton = findZillowNextButton(galleryRoot);
+
+          if (!nextButton || consecutiveNoChange >= 2) {
+            break;
+          }
+
+          if (typeof nextButton.click === "function") {
+            nextButton.click();
+          }
+
+          await sleep(350);
+        }
+      }
+    }
 
     if (blocked.size > 0) {
       for (let index = details.length - 1; index >= 0; index -= 1) {
@@ -814,7 +972,7 @@ function createPropertyEnrichmentCandidate(
 
   return {
     id: property.id,
-    listingUrl: property.listingUrl.trim(),
+    listingUrl: normalizeListingUrl(property.listingUrl).canonicalUrl,
     addressLine1: property.addressLine1,
     city: property.city,
     state: property.state,
@@ -959,6 +1117,8 @@ function mergeEnrichmentIntoProperty(
   property: PropertyRecord,
   enrichment: ReturnType<typeof listingCandidateEnrichmentResponseSchema.parse>
 ) {
+  const shouldApplyListingUrl =
+    Boolean(enrichment.listingUrl) && enrichment.listingUrl !== property.listingUrl;
   const shouldApplyPrice =
     property.askingPrice === null && enrichment.updates.askingPrice !== null;
   const propertyPhotoUrls = getPropertyPhotoUrls(property);
@@ -1129,6 +1289,7 @@ function mergeEnrichmentIntoProperty(
   const didApplySetting =
     appliedSettingFacts > 0 || appliedSettingCoverageFacts > 0;
   const changed =
+    shouldApplyListingUrl ||
     shouldApplyPrice ||
     shouldApplyPhoto ||
     shouldApplyStyle ||
@@ -1138,6 +1299,9 @@ function mergeEnrichmentIntoProperty(
   return {
     property: refreshInvestmentFacts({
       ...property,
+      listingUrl: shouldApplyListingUrl
+        ? enrichment.listingUrl
+        : property.listingUrl,
       askingPrice: shouldApplyPrice
         ? enrichment.updates.askingPrice
         : property.askingPrice,
@@ -1153,6 +1317,7 @@ function mergeEnrichmentIntoProperty(
     }),
     changed,
     appliedFields: [
+      shouldApplyListingUrl ? "listing URL" : null,
       shouldApplyPrice ? "price" : null,
       shouldApplyPhoto ? "photo" : null,
       shouldApplyStyle ? "style" : null,
@@ -1801,7 +1966,9 @@ export function PropertyManager() {
       return;
     }
 
-    const propertyDraft = removeListingPagePhotoEvidence(draft);
+    const propertyDraft = draft;
+    const enrichmentCandidateProperty =
+      removeListingPagePhotoEvidence(propertyDraft);
     let diagnostics: PropertyEnrichmentDiagnostic[] = [
       createPropertyDiagnostic(
         "client",
@@ -1843,7 +2010,10 @@ export function PropertyManager() {
         },
         signal: abortController.signal,
         body: JSON.stringify({
-          candidate: createPropertyEnrichmentCandidate(propertyDraft, browserCaptures)
+          candidate: createPropertyEnrichmentCandidate(
+            enrichmentCandidateProperty,
+            browserCaptures
+          )
         })
       });
 
@@ -1885,6 +2055,27 @@ export function PropertyManager() {
 
       if (!enrichment) {
         throw new Error("Listing enrichment did not return a result.");
+      }
+
+      const addressMismatchBlocked = enrichment.diagnostics.some(
+        (item) =>
+          item.stage === "listing url" &&
+          item.status === "failed" &&
+          item.message ===
+            "Enrichment blocked because listing URL address does not match property."
+      );
+
+      if (addressMismatchBlocked) {
+        appendDiagnostic(
+          createPropertyDiagnostic(
+            "client",
+            "failed",
+            "Enrichment stopped because the listing address does not match the property.",
+            "Correct the property address or listing URL, then run Enrich again. No property, drive-time, or scoring updates were saved."
+          )
+        );
+        setSaveStatus("Enrichment blocked: listing address mismatch");
+        return;
       }
 
       const merged = mergeEnrichmentIntoProperty(propertyDraft, enrichment);
