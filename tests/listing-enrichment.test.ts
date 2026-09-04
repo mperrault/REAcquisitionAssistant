@@ -32,7 +32,7 @@ function createJsonResponse(payload: unknown, status = 200) {
 }
 
 describe("listing page enrichment", () => {
-  it("fills missing price and photo from listing page metadata", async () => {
+  it("fills missing price but does not import photos from listing page metadata", async () => {
     const result = await enrichListingCandidate(baseCandidate, async () =>
       createFetchResponse(`<html>
         <head>
@@ -51,14 +51,15 @@ describe("listing page enrichment", () => {
 
     expect(result.candidateId).toBe(baseCandidate.id);
     expect(result.updates.askingPrice).toBe(315000);
-    expect(result.updates.primaryPhotoUrl).toBe(
-      "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg"
-    );
+    expect(result.updates.primaryPhotoUrl).toBe("");
+    expect(result.updates.photoUrls).toEqual([]);
     expect(result.diagnostics.some((item) => item.stage === "listing fetch")).toBe(
       true
     );
     expect(result.diagnostics.some((item) => item.stage === "price")).toBe(true);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Listing page did not expose a property photo."
+    ]);
   });
 
   it("emits diagnostics through a callback during enrichment", async () => {
@@ -283,6 +284,11 @@ describe("listing page enrichment", () => {
         {
           ...baseCandidate,
           askingPrice: 315000,
+          primaryPhotoUrl:
+            "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg",
+          photoUrls: [
+            "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg"
+          ],
           inferStyle: true
         },
         async (input) => {
@@ -340,6 +346,12 @@ describe("listing page enrichment", () => {
         {
           ...baseCandidate,
           askingPrice: 315000,
+          primaryPhotoUrl:
+            "https://photos.zillowstatic.com/fp/first-exterior.jpg",
+          photoUrls: [
+            "https://photos.zillowstatic.com/fp/first-exterior.jpg",
+            "https://photos.zillowstatic.com/fp/second-exterior.jpg"
+          ],
           inferStyle: true
         },
         async (input, init) => {
@@ -395,6 +407,11 @@ describe("listing page enrichment", () => {
       const result = await enrichListingCandidate(
         {
           ...baseCandidate,
+          primaryPhotoUrl:
+            "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg",
+          photoUrls: [
+            "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg"
+          ],
           inferRenovation: true
         },
         async (input) => {
@@ -483,6 +500,11 @@ describe("listing page enrichment", () => {
         {
           ...baseCandidate,
           askingPrice: 300000,
+          primaryPhotoUrl:
+            "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg",
+          photoUrls: [
+            "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg"
+          ],
           inferRenovation: true
         },
         async (input) => {
