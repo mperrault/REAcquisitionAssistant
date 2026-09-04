@@ -1881,22 +1881,15 @@ export function PropertyManager() {
     }
 
     const capturedProperty = applyCaptureToProperty(draft, capture);
-    const nextPropertyState = upsertProperty(propertyState, capturedProperty);
-    const persistedState = savePropertyState(window.localStorage, nextPropertyState);
-    const savedProperty =
-      persistedState.properties.find(
-        (property) => property.id === capturedProperty.id
-      ) ?? capturedProperty;
 
-    setPropertyState(persistedState);
-    setDraft(cloneProperty(savedProperty));
-    setSelectedPropertyId(savedProperty.id);
-    setLoadSource("storage");
-    setSaveStatus("Captured photos attached and saved");
+    // Importing capture data is an edit, not an implicit save.
+    // Keep it in the working draft so Save becomes enabled.
+    replaceDraft(capturedProperty);
+    setSelectedPropertyId(capturedProperty.id);
     setCaptureStatus(
-      `Attached ${focusedPhotoUrls.length} photo URL${
+      `Imported ${focusedPhotoUrls.length} photo URL${
         focusedPhotoUrls.length === 1 ? "" : "s"
-      }`
+      } — click Save to persist`
     );
   }
 
