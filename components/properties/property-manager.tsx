@@ -791,8 +791,26 @@ function getPropertyPhotoUrls(property: PropertyRecord) {
   );
 }
 
-function createPropertyEnrichmentCandidate(property: PropertyRecord) {
-  const photoUrls = getPropertyPhotoUrls(property);
+function createPropertyEnrichmentCandidate(
+  property: PropertyRecord,
+  browserCaptures: BrowserCaptureRecord[] = []
+) {
+  const latestMatchingCapture = browserCaptures
+    .filter((capture) => captureMatchesProperty(capture, property))
+    .sort(
+      (a, b) =>
+        new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime()
+    )[0];
+
+  const focusedCapturePhotoUrls = latestMatchingCapture
+    ? getFocusedCapturePhotoUrls(latestMatchingCapture, property)
+    : [];
+
+  const photoUrls = normalizePhotoUrls([
+    ...getPropertyPhotoUrls(property),
+    ...focusedCapturePhotoUrls
+  ]);
+  const primaryPhotoUrl = property.primaryPhotoUrl || photoUrls[0] || "";
 
   return {
     id: property.id,
@@ -802,7 +820,7 @@ function createPropertyEnrichmentCandidate(property: PropertyRecord) {
     state: property.state,
     postalCode: property.postalCode,
     askingPrice: property.askingPrice,
-    primaryPhotoUrl: property.primaryPhotoUrl || photoUrls[0] || "",
+    primaryPhotoUrl,
     photoUrls,
     houseStyle: property.houseStyle,
     listingRemarks: property.listingRemarks,
@@ -1825,7 +1843,7 @@ export function PropertyManager() {
         },
         signal: abortController.signal,
         body: JSON.stringify({
-          candidate: createPropertyEnrichmentCandidate(propertyDraft)
+          candidate: createPropertyEnrichmentCandidate(propertyDraft, browserCaptures)
         })
       });
 

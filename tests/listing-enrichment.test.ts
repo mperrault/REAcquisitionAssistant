@@ -491,6 +491,86 @@ describe("listing page enrichment", () => {
     }
   });
 
+  it("analyzes all eligible saved Realtor photos in renovation batches", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const apiImageCounts: number[] = [];
+    const photoUrls = Array.from(
+      { length: 17 },
+      (_, index) =>
+        `https://ap.rdcpix.com/47highstreetstaffordct06076l-m${index + 1}rd-w960_h720`
+    );
+
+    try {
+      const result = await enrichListingCandidate(
+        {
+          ...baseCandidate,
+          primaryPhotoUrl: photoUrls[0],
+          photoUrls,
+          inferRenovation: true
+        },
+        async (input, init) => {
+          if (input.includes("api.openai.com")) {
+            const body = JSON.parse(String(init?.body)) as {
+              input?: Array<{
+                content?: Array<{ type?: string }>;
+              }>;
+            };
+            apiImageCounts.push(
+              body.input?.[0]?.content?.filter(
+                (item) => item.type === "input_image"
+              ).length ?? 0
+            );
+
+            return createJsonResponse({
+              output_text: JSON.stringify({
+                scopeFacts: [
+                  {
+                    factKey: "renovation.paint",
+                    confidence: 0.7,
+                    evidence: "Visible finishes need refreshing."
+                  }
+                ],
+                lineItems: [
+                  {
+                    label: "Interior paint",
+                    amount: 6000,
+                    confidence: 0.7,
+                    evidence: "Visible finishes need refreshing."
+                  }
+                ],
+                expectedCost: 6000,
+                lowEstimate: 4000,
+                highEstimate: 8000
+              })
+            });
+          }
+
+          return createFetchResponse(
+            "<html><body>47 High St Stafford CT 06076 Detached home.</body></html>"
+          );
+        }
+      );
+
+      expect(apiImageCounts).toEqual([8, 8, 1]);
+      const renovationPhotoDiagnostic = result.diagnostics.find(
+        (item) => item.stage === "renovation photos"
+      );
+
+      expect(renovationPhotoDiagnostic).toBeDefined();
+      expect(renovationPhotoDiagnostic?.status).toBe("started");
+      expect(renovationPhotoDiagnostic?.detail).toContain("17");
+      expect(result.updates.renovationScopeFacts).toHaveLength(1);
+      expect(result.updates.renovationLineItems).toHaveLength(1);
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+    }
+  });
+
   it("derives renovation scope facts from photo-inferred line items", async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";

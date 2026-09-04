@@ -574,11 +574,15 @@ function isLikelyListingImageUrl(value: string) {
 function isEligibleVisionImageUrl(value: string) {
   try {
     const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    const isKnownListingPhotoHost =
+      hostname === "ap.rdcpix.com" ||
+      hostname === "photos.zillowstatic.com";
 
     return (
       ["http:", "https:"].includes(url.protocol) &&
       !isBlockedFetchHost(url) &&
-      isLikelyListingImageUrl(value)
+      (isKnownListingPhotoHost || isLikelyListingImageUrl(value))
     );
   } catch {
     return false;
@@ -1383,13 +1387,82 @@ async function inferStyleFromRequestEvidence({
   return { style: null, failureReason };
 }
 
+function mergeRenovationPhotoBatchResults(
+  results: RenovationInference[]
+): RenovationInference | null {
+  if (results.length === 0) {
+    return null;
+  }
+
+  if (results.length === 1) {
+    return results[0];
+  }
+
+  const scopeFacts = new Map<
+    string,
+    z.infer<typeof renovationScopeFactSchema>
+  >();
+  const lineItems = new Map<
+    string,
+    z.infer<typeof renovationLineItemSchema>
+  >();
+
+  for (const result of results) {
+    for (const fact of result.scopeFacts) {
+      const existing = scopeFacts.get(fact.factKey);
+      const existingConfidence = existing?.confidence ?? 0;
+      const nextConfidence = fact.confidence ?? 0;
+
+      if (!existing || nextConfidence > existingConfidence) {
+        scopeFacts.set(fact.factKey, fact);
+      }
+    }
+
+    for (const item of result.lineItems) {
+      const existing = lineItems.get(item.factKey);
+      const existingConfidence = existing?.confidence ?? 0;
+      const nextConfidence = item.confidence ?? 0;
+
+      if (!existing || nextConfidence > existingConfidence) {
+        lineItems.set(item.factKey, item);
+      }
+    }
+  }
+
+  const mergedLineItems = Array.from(lineItems.values());
+  const expectedCost =
+    mergedLineItems.length > 0
+      ? mergedLineItems.reduce((total, item) => total + item.amount, 0)
+      : results.reduce(
+          (total, result) => total + (result.expectedCost ?? 0),
+          0
+        ) || null;
+
+  return {
+    scopeFacts: Array.from(scopeFacts.values()),
+    lineItems: mergedLineItems,
+    expectedCost,
+    lowEstimate:
+      expectedCost === null ? null : Math.round(expectedCost * 0.7),
+    highEstimate:
+      expectedCost === null ? null : Math.round(expectedCost * 1.4)
+  };
+}
+
 async function inferRenovationsFromPhotos(
   photoUrls: string[],
   fetcher: FetchLike,
   signal?: AbortSignal
 ): Promise<{ renovation: RenovationInference | null; warning: string | null }> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  const imageUrls = getEligibleVisionImageUrls(photoUrls).slice(0, 8);
+  const imageUrls = getEligibleVisionImageUrls(photoUrls);
+  const configuredBatchSize = Number.parseInt(
+    process.env.OPENAI_RENOVATION_PHOTO_BATCH_SIZE?.trim() || "8",
+    10
+  );
+  const batchSize = Number.isFinite(configuredBatchSize)
+    ? Math.max(1, Math.min(12, configuredBatchSize))
+    : 8;
 
   if (imageUrls.length === 0) {
     return {
@@ -1460,34 +1533,60 @@ async function inferRenovationsFromPhotos(
     };
   }
 
-  const result = await requestRenovation(imageUrls);
+  async function analyzeBatch(batch: string[]) {
+    const result = await requestRenovation(batch);
 
-  if (result.renovation || responseWarningIsNotImageSpecific(result.warning)) {
-    return {
-      renovation: result.renovation,
-      warning:
-        result.warning ??
-        (result.renovation
-          ? null
-          : "renovation photo inference ran but did not return confident scope")
-    };
+    if (result.renovation || responseWarningIsNotImageSpecific(result.warning)) {
+      return result;
+    }
+
+    if (batch.length > 1) {
+      const singleImageResults: RenovationInference[] = [];
+
+      for (const imageUrl of batch) {
+        throwIfAborted(signal);
+        const singleImageResult = await requestRenovation([imageUrl]);
+
+        if (singleImageResult.renovation) {
+          singleImageResults.push(singleImageResult.renovation);
+        }
+      }
+
+      if (singleImageResults.length > 0) {
+        return {
+          renovation: mergeRenovationPhotoBatchResults(singleImageResults),
+          warning: null
+        };
+      }
+    }
+
+    return result;
   }
 
-  if (imageUrls.length > 1) {
-    for (const imageUrl of imageUrls) {
-      const singleImageResult = await requestRenovation([imageUrl]);
+  const batchResults: RenovationInference[] = [];
+  const warnings: string[] = [];
 
-      if (singleImageResult.renovation) {
-        return singleImageResult;
-      }
+  for (let index = 0; index < imageUrls.length; index += batchSize) {
+    throwIfAborted(signal);
+    const batch = imageUrls.slice(index, index + batchSize);
+    const result = await analyzeBatch(batch);
+
+    if (result.renovation) {
+      batchResults.push(result.renovation);
+    } else if (result.warning) {
+      warnings.push(result.warning);
     }
   }
 
+  const renovation = mergeRenovationPhotoBatchResults(batchResults);
+
   return {
-    renovation: null,
+    renovation,
     warning:
-      result.warning ??
-      "renovation photo inference ran but did not return confident scope"
+      renovation
+        ? null
+        : warnings[0] ??
+          "renovation photo inference ran but did not return confident scope"
   };
 }
 
@@ -1892,7 +1991,9 @@ export async function enrichListingCandidate(
         );
       }
       const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
-      const analyzedPhotoCount = Math.min(eligiblePhotoCount, 8);
+      const analyzedPhotoCount = eligiblePhotoCount;
+    const renovationBatchCount =
+      eligiblePhotoCount > 0 ? Math.ceil(eligiblePhotoCount / 8) : 0;
       if (shouldInferRenovation) {
         addDiagnostic(
           "renovation photos",
@@ -1901,7 +2002,7 @@ export async function enrichListingCandidate(
             ? "Running photo renovation inference from saved candidate photos."
             : "Photo renovation inference has no eligible saved photo URLs.",
           eligiblePhotoCount > 0
-            ? `Analyzing ${analyzedPhotoCount} of ${eligiblePhotoCount} unique eligible saved photos.`
+            ? `Analyzing all ${analyzedPhotoCount} unique eligible saved photos in ${renovationBatchCount} batch${renovationBatchCount === 1 ? "" : "es"} of up to 8.`
             : "No eligible saved photos will be analyzed."
         );
       }
