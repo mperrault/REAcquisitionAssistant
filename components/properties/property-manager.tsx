@@ -2423,6 +2423,10 @@ export function PropertyManager() {
     });
   }
 
+  const enrichmentPreviewPhotoUrls = draft
+    ? getPropertyPhotoUrls(draft).slice(0, 4)
+    : [];
+
   return (
     <div className="mx-auto max-w-screen-2xl px-4 py-6 sm:px-6 lg:px-8">
       {isEnrichingProperty && draft ? (
@@ -2456,6 +2460,28 @@ export function PropertyManager() {
                 Cancel
               </Button>
             </div>
+
+            {enrichmentPreviewPhotoUrls.length > 0 ? (
+              <div className="mt-5 grid grid-cols-4 gap-2">
+                {enrichmentPreviewPhotoUrls.map((photoUrl) => (
+                  <div
+                    key={photoUrl}
+                    className="relative aspect-[4/3] overflow-hidden rounded-md border border-border bg-secondary"
+                  >
+                    <Image
+                      src={photoUrl}
+                      alt=""
+                      fill
+                      sizes="160px"
+                      className="object-cover"
+                      loading="lazy"
+                      unoptimized
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             <div
               className="mt-5 max-h-80 space-y-2 overflow-y-auto"
@@ -4152,7 +4178,8 @@ function DiagnosticsTab({
 }: {
   diagnostics: PropertyEnrichmentDiagnostic[];
 }) {
-  const latestAt = diagnostics[0]?.at ?? null;
+  const latestAt = diagnostics.at(-1)?.at ?? null;
+  const latestDiagnosticRef = React.useRef<HTMLDivElement | null>(null);
   const statusVariant: Record<
     PropertyEnrichmentDiagnostic["status"],
     React.ComponentProps<typeof Badge>["variant"]
@@ -4164,6 +4191,13 @@ function DiagnosticsTab({
     failed: "destructive",
     info: "secondary"
   };
+
+  React.useEffect(() => {
+    latestDiagnosticRef.current?.scrollIntoView({
+      block: "end",
+      behavior: "auto"
+    });
+  }, [diagnostics.length]);
 
   return (
     <div className="grid gap-5">
@@ -4199,6 +4233,7 @@ function DiagnosticsTab({
                   ) : null}
                 </div>
               ))}
+              <div ref={latestDiagnosticRef} aria-hidden="true" />
             </div>
           </div>
         ) : (

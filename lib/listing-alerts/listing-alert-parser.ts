@@ -1093,6 +1093,87 @@ function splitCandidateBlocks(text: string) {
   });
 }
 
+function isSoldAlertHeading(line: string) {
+  return /^(?:just\s+sold|sold|recently\s+sold)\b/i.test(line.trim());
+}
+
+function isInactiveListingStatusLine(line: string) {
+  return /^(?:just\s+sold|sold|recently\s+sold|pending(?:\s+sale)?|contingent|under\s+contract|off\s+market)\s*$/i.test(
+    line.trim()
+  );
+}
+
+function getInactiveListingHeadingAddress(line: string) {
+  const match = line
+    .trim()
+    .match(
+      /^(?:just\s+sold|sold|recently\s+sold|pending(?:\s+sale)?|contingent|under\s+contract|off\s+market)\s*:?\s+(.+)$/i
+    );
+
+  return match?.[1] ? normalizeAddressKeyText(match[1]) : "";
+}
+
+function isSoldOnlyAlert(text: string, blocks: string[]) {
+  if (blocks.length !== 1) {
+    return false;
+  }
+
+  const lines = getMeaningfulLines(text);
+  const firstLine = lines[0] ?? "";
+
+  if (!isSoldAlertHeading(firstLine)) {
+    return false;
+  }
+
+  const soldHeadingCount = lines.filter(isSoldAlertHeading).length;
+
+  if (soldHeadingCount > 1) {
+    return true;
+  }
+
+  const headingSubject = normalizeAddressKeyText(
+    firstLine.replace(/^(?:just\s+sold|sold|recently\s+sold)\s*:?\s*/i, "")
+  );
+  const blockAddress = normalizeAddressKeyText(
+    extractAddress(blocks[0] ?? "").addressLine1
+  );
+
+  return Boolean(headingSubject && blockAddress && headingSubject === blockAddress);
+}
+
+function getInactiveHeadingAddresses(text: string) {
+  return new Set(
+    getMeaningfulLines(text)
+      .map(getInactiveListingHeadingAddress)
+      .filter(Boolean)
+  );
+}
+
+function blockHasInactiveListingStatus(
+  block: string,
+  inactiveHeadingAddresses: Set<string>
+) {
+  const lines = getMeaningfulLines(block);
+
+  if (lines.some(isInactiveListingStatusLine)) {
+    return true;
+  }
+
+  const blockAddress = normalizeAddressKeyText(extractAddress(block).addressLine1);
+
+  if (!blockAddress) {
+    return false;
+  }
+
+  if (inactiveHeadingAddresses.has(blockAddress)) {
+    return true;
+  }
+
+  return lines
+    .map(getInactiveListingHeadingAddress)
+    .some((headingAddress) => headingAddress && headingAddress === blockAddress);
+}
+
 function parseInteger(value: string | undefined) {
   if (!value) {
     return null;
@@ -1655,11 +1736,26 @@ export function parseListingAlertText(input: string, options: ParseOptions = {})
   const photoCandidates = extractPhotoCandidatesFromHtml(options.bodyHtml ?? "");
   const usedPhotoKeys = new Set<string>();
   const blocks = splitCandidateBlocks(normalizedInput);
+
+  if (isSoldOnlyAlert(normalizedInput, blocks)) {
+    return {
+      candidates: [] as ListingCandidateExtract[],
+      warnings: []
+    };
+  }
+
+  const inactiveHeadingAddresses = getInactiveHeadingAddresses(normalizedInput);
   const allowOrderFallbackPhotoMatching = !(
     isLikelyZillowAlert(normalizedInput) && blocks.length > 1
   );
+  let skippedInactiveBlockCount = 0;
 
   for (const block of blocks) {
+    if (blockHasInactiveListingStatus(block, inactiveHeadingAddresses)) {
+      skippedInactiveBlockCount += 1;
+      continue;
+    }
+
     const candidatePhotos = selectPhotosForBlock(
       block,
       photoCandidates,
@@ -1718,7 +1814,7 @@ export function parseListingAlertText(input: string, options: ParseOptions = {})
   return {
     candidates,
     warnings:
-      candidates.length > 0
+      candidates.length > 0 || skippedInactiveBlockCount > 0
         ? []
         : ["No listing candidates were detected in the alert message."]
   };

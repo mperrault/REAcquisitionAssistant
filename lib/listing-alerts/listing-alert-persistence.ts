@@ -575,6 +575,23 @@ export function clearListingAlertQueue(
   });
 }
 
+export function startFreshListingAlertQueue(
+  state: ListingAlertState,
+  timestamp = nowIso()
+): ListingAlertState {
+  return listingAlertStateSchema.parse({
+    ...state,
+    sources: state.sources.map((source) => ({
+      ...source,
+      lastCheckedAt: timestamp,
+      updatedAt: timestamp
+    })),
+    messages: [],
+    candidates: [],
+    runs: []
+  });
+}
+
 export function markListingCandidateIgnored(
   state: ListingAlertState,
   candidateId: string,

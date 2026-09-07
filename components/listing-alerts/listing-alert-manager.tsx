@@ -13,7 +13,6 @@ import {
   RotateCcw,
   Save,
   Sparkles,
-  Trash2,
   XCircle
 } from "lucide-react";
 
@@ -36,7 +35,6 @@ import {
   countEnabledProfileTowns
 } from "@/lib/listing-alerts/geography-filter";
 import {
-  clearListingAlertQueue,
   createEmptyListingAlertState,
   createListingAlertSource,
   ingestListingAlertText,
@@ -47,8 +45,8 @@ import {
   markListingCandidateImported,
   reprocessListingAlertMessages,
   saveListingAlertState,
-  upsertListingAlertSource,
-  LISTING_ALERT_STORAGE_KEY
+  startFreshListingAlertQueue,
+  upsertListingAlertSource
 } from "@/lib/listing-alerts/listing-alert-persistence";
 import type {
   ListingAlertConnectorConfig,
@@ -672,14 +670,15 @@ function getScorePreviewLabel(scorePreview: CandidateScorePreview | undefined) {
   return `Weak ${scorePreview.evaluation.normalizedScore}`;
 }
 
-function createDefaultSource() {
+function createDefaultSource(patch: Partial<ListingAlertSource> = {}) {
   return createListingAlertSource({
     name: "Saved Search Alerts",
     provider: "gmail_label",
     mailboxLabel: "RE Acquisition Assistant",
     searchQuery:
       'label:"RE Acquisition Assistant" newer_than:30d (from:zillow OR from:redfin OR from:realtor)',
-    pollingMinutes: 30
+    pollingMinutes: 30,
+    ...patch
   });
 }
 
@@ -989,26 +988,39 @@ export function ListingAlertManager() {
     persistListingState(nextState, "Source saved");
   }
 
-  function handleResetAlerts() {
-    window.localStorage.removeItem(LISTING_ALERT_STORAGE_KEY);
-    const source = createDefaultSource();
-    const nextState = upsertListingAlertSource(
-      createEmptyListingAlertState(),
-      source
-    );
+  function handleResetSourceSettings() {
+    if (!selectedSource) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const source = createDefaultSource({
+      id: selectedSource.id,
+      lastCheckedAt: selectedSource.lastCheckedAt,
+      createdAt: selectedSource.createdAt,
+      updatedAt: timestamp
+    });
+    const nextState = {
+      ...listingState,
+      sources: listingState.sources.map((item) =>
+        item.id === selectedSource.id ? source : item
+      )
+    };
     const persisted = saveListingAlertState(window.localStorage, nextState);
 
     setListingState(persisted);
     setSelectedSourceId(source.id);
     setSourceDraft(cloneSource(source));
     setLoadSource("storage");
-    setActionStatus("Alerts reset");
+    setActionStatus("Source settings reset; queue preserved");
   }
 
-  function handleClearQueue() {
+  function handleStartFreshFromNow() {
+    const timestamp = new Date().toISOString();
+
     persistListingState(
-      clearListingAlertQueue(listingState),
-      "Queue cleared; sources preserved"
+      startFreshListingAlertQueue(listingState, timestamp),
+      "Started fresh from now; older mailbox messages will not be reloaded"
     );
   }
 
@@ -1376,22 +1388,9 @@ export function ListingAlertManager() {
           <Badge variant={actionStatus === "Ready" ? "success" : "warning"}>
             {actionStatus}
           </Badge>
-          <Button type="button" variant="outline" onClick={handleResetAlerts}>
-            <RotateCcw aria-hidden="true" />
-            Reset
-          </Button>
           <Button type="button" variant="outline" onClick={handleNewSource}>
             <Plus aria-hidden="true" />
             Source
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleReprocessQueue}
-            disabled={!selectedSource || selectedSourceMessageCount === 0}
-          >
-            <RefreshCw aria-hidden="true" />
-            Reprocess
           </Button>
           <Button
             type="button"
@@ -1635,6 +1634,28 @@ export function ListingAlertManager() {
                   : "No runs"}
               </span>
             </div>
+            <div className="grid grid-cols-1 gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleReprocessQueue}
+                disabled={!selectedSource || selectedSourceMessageCount === 0}
+              >
+                <RefreshCw aria-hidden="true" />
+                Reprocess Saved Emails
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleResetSourceSettings}
+                disabled={!selectedSource}
+              >
+                <RotateCcw aria-hidden="true" />
+                Reset Source Settings
+              </Button>
+            </div>
           </div>
         </aside>
 
@@ -1686,15 +1707,11 @@ export function ListingAlertManager() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={handleClearQueue}
-                  disabled={
-                    listingState.candidates.length === 0 &&
-                    listingState.messages.length === 0 &&
-                    listingState.runs.length === 0
-                  }
+                  onClick={handleStartFreshFromNow}
+                  disabled={listingState.sources.length === 0}
                 >
-                  <Trash2 aria-hidden="true" />
-                  Clear Queue
+                  <RotateCcw aria-hidden="true" />
+                  Start Fresh From Now
                 </Button>
                 <Select
                   className="w-40"

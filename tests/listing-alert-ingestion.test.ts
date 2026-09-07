@@ -19,6 +19,7 @@ import {
   loadListingAlertState,
   markListingCandidatesIgnored,
   reprocessListingAlertMessages,
+  startFreshListingAlertQueue,
   upsertListingAlertSource
 } from "@/lib/listing-alerts/listing-alert-persistence";
 import {
@@ -701,6 +702,65 @@ https://www.realtor.com/realestateandhomes-detail/47-High-St_Stafford_CT_06076_M
     );
   });
 
+  it("excludes sold-only listing alerts", () => {
+    const result = parseListingAlertText(
+      `Just sold: 62 West St
+
+62 West St, Stafford, CT 06076
+3 bed 2 bath 1,400 sqft
+https://www.realtor.com/realestateandhomes-detail/62-West-St_Stafford_CT_06076_M44444`,
+      {
+        timestamp,
+        createId: deterministicIds("fact")
+      }
+    );
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("excludes inactive listing blocks by status line or matching heading", () => {
+    const result = parseListingAlertText(
+      `Sold: 123 Stafford St
+
+123 Stafford St, Stafford, CT 06076
+$380,000
+2 bed 1 bath 1,004 sqft
+https://www.zillow.com/homedetails/123-Stafford-St-Stafford-Springs-CT-06076/58103048_zpid/
+
+Contingent
+$369,900
+2 bed 1 bath 1,004 sqft
+123 Stafford Street, Stafford, CT 06076
+https://www.realtor.com/realestateandhomes-detail/123-Stafford-St_Stafford_CT_06076_M41191-74215`,
+      {
+        timestamp,
+        createId: deterministicIds("fact")
+      }
+    );
+
+    expect(result.candidates).toHaveLength(0);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("does not exclude active listings that only mention sold as-is terms", () => {
+    const result = parseListingAlertText(
+      `For sale
+$250,000
+3 bed 2 bath 1,400 sqft
+16 Chestnut Hill Rd, Stafford, CT 06076
+Being sold as is with cosmetic updates needed.
+https://www.zillow.com/homedetails/16-Chestnut-Hill-Rd-Stafford-CT-06076/12345_zpid/`,
+      {
+        timestamp,
+        createId: deterministicIds("fact")
+      }
+    );
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.addressLine1).toBe("16 Chestnut Hill Rd");
+  });
+
   it("explains when alert HTML has no property photo URL", () => {
     const result = parseListingAlertText(zillowInstantAlertText, {
       timestamp,
@@ -1071,7 +1131,8 @@ https://www.realtor.com/realestateandhomes-detail/175-W-Stafford-Rd_Stafford_CT_
     );
 
     expect(secondRun.run.candidatesCreated).toBe(0);
-    expect(secondRun.run.candidatesUpdated).toBe(1);
+    expect(secondRun.run.candidatesUpdated).toBe(0);
+    expect(secondRun.candidates).toHaveLength(0);
     expect(candidate?.askingPrice).toBe(250000);
     expect(candidate?.primaryPhotoUrl).toBe(realtorStaffordPhotoUrl);
     expect(candidate?.warnings).not.toContain(NO_MATCHING_PROPERTY_PHOTO_WARNING);
@@ -1411,6 +1472,54 @@ https://example.com/manchester`
     expect(cleared.candidates).toHaveLength(0);
     expect(cleared.messages).toHaveLength(0);
     expect(cleared.runs).toHaveLength(0);
+  });
+
+  it("starts fresh from now by clearing queue data and advancing source cursors", () => {
+    const source = createListingAlertSource(
+      {
+        id: "source-fresh",
+        name: "MilestoneSW Listing Alerts",
+        provider: "imap_mailbox",
+        connectorConfig: {
+          gmailAccountHint: "",
+          imapHost: "mail.example.com",
+          imapPort: 993,
+          imapSecurity: "ssl_tls",
+          imapUsername: "alerts@example.com",
+          imapMailbox: "INBOX",
+          credentialEnvVar: "REA_LISTING_ALERT_IMAP_PASSWORD"
+        }
+      },
+      timestamp,
+      deterministicIds("source")
+    );
+    const initialState = upsertListingAlertSource(
+      createEmptyListingAlertState(),
+      source,
+      timestamp
+    );
+    const ingested = ingestListingAlertText(
+      initialState,
+      source.id,
+      {
+        externalMessageId: "message-fresh",
+        subject: "Alert",
+        from: "alerts@example.com",
+        receivedAt: timestamp,
+        bodyText: alertText
+      },
+      timestamp,
+      deterministicIds("fresh")
+    );
+    const freshTimestamp = "2026-08-11T12:00:00.000Z";
+    const fresh = startFreshListingAlertQueue(ingested.state, freshTimestamp);
+
+    expect(fresh.sources).toHaveLength(1);
+    expect(fresh.sources[0]?.lastCheckedAt).toBe(freshTimestamp);
+    expect(fresh.sources[0]?.connectorConfig.imapHost).toBe("mail.example.com");
+    expect(fresh.candidates).toHaveLength(0);
+    expect(fresh.messages).toHaveLength(0);
+    expect(fresh.runs).toHaveLength(0);
   });
 
   it("stores IMAP connector settings without storing a password", () => {
