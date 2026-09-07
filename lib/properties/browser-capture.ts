@@ -185,6 +185,29 @@ export function selectCapturePhotoUrls({
       : photoUrls;
   const normalizedUrls = normalizePhotoUrls(sourceUrls);
 
+  if (normalizedSourceSite.includes("realtor")) {
+    if (normalizedDetails.length === 0) {
+      return normalizedUrls.slice(0, 80);
+    }
+
+    const targetAddressKey = normalizeAddressComparisonText(addressLine1);
+    const realtorPhotoDetails = normalizedDetails
+      .filter((photo) => normalizedUrls.includes(photo.url))
+      .filter((photo) => !photoHasDifferentAddress(photo.alt, targetAddressKey));
+    const dominantFamily = getDominantRealtorPhotoFamily(
+      realtorPhotoDetails.map((photo) => photo.url)
+    );
+    const familyFilteredDetails = dominantFamily
+      ? realtorPhotoDetails.filter(
+          (photo) => getRealtorPhotoFamily(photo.url) === dominantFamily
+        )
+      : realtorPhotoDetails;
+
+    return Array.from(
+      new Set(familyFilteredDetails.map((photo) => photo.url))
+    ).slice(0, 80);
+  }
+
   if (!normalizedSourceSite.includes("zillow")) {
     return normalizedUrls.slice(0, 80);
   }
@@ -321,6 +344,69 @@ function getPhotoIdentity(url: string) {
   }
 
   return url;
+}
+
+function getRealtorPhotoFamily(url: string) {
+  const match = url.match(/ap\.rdcpix\.com\/([^/?#]+?)l-m\d+/i);
+
+  return match?.[1]?.toLowerCase() ?? "";
+}
+
+function getDominantRealtorPhotoFamily(urls: string[]) {
+  const familyCounts = new Map<string, number>();
+
+  for (const url of urls) {
+    const family = getRealtorPhotoFamily(url);
+
+    if (!family) {
+      continue;
+    }
+
+    familyCounts.set(family, (familyCounts.get(family) ?? 0) + 1);
+  }
+
+  return (
+    Array.from(familyCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0] ??
+    ""
+  );
+}
+
+function normalizeAddressComparisonText(value: string) {
+  return compactWhitespace(value)
+    .toLowerCase()
+    .replace(/\b(rd|st|ave|ln|dr|ct|cir|ter|pl|blvd|hwy)\.?\b/g, (token) => {
+      const expansions: Record<string, string> = {
+        rd: "road",
+        st: "street",
+        ave: "avenue",
+        ln: "lane",
+        dr: "drive",
+        ct: "court",
+        cir: "circle",
+        ter: "terrace",
+        pl: "place",
+        blvd: "boulevard",
+        hwy: "highway"
+      };
+
+      return expansions[token.replace(".", "")] ?? token;
+    })
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function photoHasDifferentAddress(alt: string, targetAddressKey: string) {
+  if (!targetAddressKey) {
+    return false;
+  }
+
+  const photoAddress = parseAddressParts(alt);
+
+  if (!photoAddress.addressLine1) {
+    return false;
+  }
+
+  return normalizeAddressComparisonText(photoAddress.addressLine1) !== targetAddressKey;
 }
 
 function isTargetListingPhoto(

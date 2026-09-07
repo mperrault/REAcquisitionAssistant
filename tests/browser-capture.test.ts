@@ -222,6 +222,40 @@ describe("browser capture", () => {
     ]);
   });
 
+  it("filters Realtor outlier photos from other property image families", () => {
+    const otherHomePhoto =
+      "https://ap.rdcpix.com/otherpropertyl-m1111111111rd-w960_h720.webp";
+    const targetExterior =
+      "https://ap.rdcpix.com/targetpropertyl-m2222222222rd-w960_h720.webp";
+    const targetInterior =
+      "https://ap.rdcpix.com/targetpropertyl-m3333333333rd-w960_h720.webp";
+
+    expect(
+      selectCapturePhotoUrls({
+        sourceSite: "realtor.com",
+        addressLine1: "175 W Stafford Rd",
+        photoUrls: [],
+        photoDetails: [
+          {
+            url: otherHomePhoto,
+            alt: "Photo of 75 W Stafford Rd, Stafford, CT 06076",
+            index: 0
+          },
+          {
+            url: targetExterior,
+            alt: "gray featured at 175 W Stafford Rd, Stafford, CT 06076",
+            index: 1
+          },
+          {
+            url: targetInterior,
+            alt: "kitchen",
+            index: 2
+          }
+        ]
+      })
+    ).toEqual([targetExterior, targetInterior]);
+  });
+
   it("keeps Zillow photos for the target listing and drops nearby homes", () => {
     expect(
       selectCapturePhotoUrls({
