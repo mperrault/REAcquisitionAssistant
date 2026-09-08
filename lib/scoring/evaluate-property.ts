@@ -767,7 +767,9 @@ function evaluateResaleSupport(
     return;
   }
 
-  const estimatedResaleValue = asNumber(facts.get("resale.estimated_value"));
+  const estimatedResaleValue =
+    asNumber(facts.get("resale.estimated_value")) ??
+    asNumber(facts.get("resale.suggested_value"));
 
   if (estimatedResaleValue === null || estimatedResaleValue <= 0) {
     return;
@@ -958,6 +960,11 @@ function createScoreBadges(
   const hasWaterSetting = hasTruthyFact(facts, waterSettingKeys);
   const pricePerSqft = asNumber(facts.get("financial.price_per_sqft"));
   const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+  const compCount = asNumber(facts.get("resale.comp_count")) ?? 0;
+  const resaleValue =
+    asNumber(facts.get("resale.estimated_value")) ??
+    asNumber(facts.get("resale.suggested_value"));
+  const projectedTotal = getProjectedInvestmentTotal(property, facts);
   const isLowPricePerSqft = isTruthyFact(
     facts.get("financial.low_price_per_sqft") ?? null
   );
@@ -1021,6 +1028,41 @@ function createScoreBadges(
         "Cosmetic renovation need may be worthwhile given price or setting."
       )
     );
+  }
+
+  if (compCount >= 2 && resaleValue !== null) {
+    badges.push(
+      createScoreBadge(
+        "comp_supported",
+        "Comp Supported",
+        "secondary",
+        `${compCount} comparable sales support a resale estimate.`
+      )
+    );
+  }
+
+  if (resaleValue !== null && projectedTotal !== null && resaleValue > 0) {
+    const spreadPercent = (resaleValue - projectedTotal) / resaleValue;
+
+    if (spreadPercent >= 0.15) {
+      badges.push(
+        createScoreBadge(
+          "strong_spread",
+          "Strong Spread",
+          "success",
+          "Estimated resale value has at least 15% spread over projected total investment."
+        )
+      );
+    } else if (spreadPercent < 0.03) {
+      badges.push(
+        createScoreBadge(
+          "thin_spread",
+          "Thin Spread",
+          "warning",
+          "Estimated resale value has less than 3% spread over projected total investment."
+        )
+      );
+    }
   }
 
   return badges;

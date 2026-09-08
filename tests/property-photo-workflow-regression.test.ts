@@ -119,8 +119,14 @@ describe("property photo workflow regression guards", () => {
 
     expect(source).toContain('id: "resale"');
     expect(source).toContain("resale.estimated_value");
+    expect(source).toContain("resale.suggested_value");
+    expect(source).toContain("updateCompNumber(");
+    expect(source).toContain("sale_price");
     expect(source).toContain("resale.comp_notes");
-    expect(source).toContain("Estimated Resale Value");
+    expect(source).toContain("Comparable Sales");
+    expect(source).toContain("Use Suggested");
+    expect(source).toContain("Resale Value Override");
+    expect(source).toContain("Suggested Resale");
     expect(source).toContain("Implied Spread");
   });
 

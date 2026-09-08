@@ -68,6 +68,11 @@ import {
   getRenovationExpectedCost
 } from "@/lib/properties/property-dashboard";
 import {
+  getResaleCompPricePerSqft,
+  getResaleCompSummary,
+  type ResaleCompItem
+} from "@/lib/properties/resale-comps";
+import {
   type LifecycleStatus,
   type ListingStatus,
   type PropertyEnrichmentDiagnostic,
@@ -4022,6 +4027,14 @@ const renovationFactLabels = {
   projectedTotal: "Projected total investment"
 };
 
+const resaleFactLabels = {
+  estimatedValue: "Estimated resale value",
+  suggestedValue: "Suggested resale value",
+  compCount: "Comps reviewed",
+  confidence: "Resale confidence",
+  compNotes: "Comparable sale notes"
+};
+
 type RenovationLineItem = {
   fact: PropertyFact;
   amount: number | null;
@@ -4055,6 +4068,8 @@ function upsertNumberFact(
 
   const existingFact = facts.find((fact) => fact.factKey === factKey);
   const observedAt = new Date().toISOString();
+  const isTrustedUserInput =
+    sourceType === "user_entered" || sourceType === "verified";
 
   if (existingFact) {
     return facts.map((fact) =>
@@ -4065,8 +4080,8 @@ function upsertNumberFact(
             value,
             sourceType,
             sourceReference,
-            confidence: null,
-            verified: false,
+            confidence: isTrustedUserInput ? 1 : null,
+            verified: isTrustedUserInput,
             observedAt
           }
         : fact
@@ -4080,7 +4095,9 @@ function upsertNumberFact(
       label,
       value,
       sourceType,
-      sourceReference
+      sourceReference,
+      confidence: isTrustedUserInput ? 1 : null,
+      verified: isTrustedUserInput
     })
   ];
 }
@@ -4110,7 +4127,8 @@ function upsertStringFact(
             value,
             sourceType: "user_entered" as const,
             sourceReference,
-            confidence: null,
+            confidence: 1,
+            verified: true,
             observedAt
           }
         : fact
@@ -4124,7 +4142,9 @@ function upsertStringFact(
       label,
       value,
       sourceType: "user_entered",
-      sourceReference
+      sourceReference,
+      confidence: 1,
+      verified: true
     })
   ];
 }
@@ -4196,6 +4216,31 @@ function refreshInvestmentFacts(property: PropertyRecord): PropertyRecord {
   };
 }
 
+function refreshResaleFacts(property: PropertyRecord): PropertyRecord {
+  const summary = getResaleCompSummary(property);
+  let facts = upsertNumberFact(
+    property.facts,
+    "resale.comp_count",
+    resaleFactLabels.compCount,
+    summary.usableComps.length > 0 ? summary.usableComps.length : null,
+    "api",
+    "Comparable sales model"
+  );
+  facts = upsertNumberFact(
+    facts,
+    "resale.suggested_value",
+    resaleFactLabels.suggestedValue,
+    summary.suggestedResaleValue,
+    "api",
+    "Comparable sales model"
+  );
+
+  return {
+    ...property,
+    facts
+  };
+}
+
 function ResaleTab({
   draft,
   updateDraft
@@ -4203,6 +4248,7 @@ function ResaleTab({
   draft: PropertyRecord;
   updateDraft: (patch: Partial<PropertyRecord>) => void;
 }) {
+  const resaleSummary = getResaleCompSummary(draft);
   const estimatedResaleValue = getNumericFactValue(
     draft,
     "resale.estimated_value"
@@ -4211,22 +4257,28 @@ function ResaleTab({
   const resaleConfidence = getStringFactValue(draft, "resale.confidence");
   const compNotes = getStringFactValue(draft, "resale.comp_notes");
   const projectedTotal = getProjectedTotalInvestment(draft);
+  const scoringResaleValue =
+    estimatedResaleValue ?? resaleSummary.suggestedResaleValue;
   const impliedSpread =
-    estimatedResaleValue !== null && projectedTotal !== null
-      ? estimatedResaleValue - projectedTotal
+    scoringResaleValue !== null && projectedTotal !== null
+      ? scoringResaleValue - projectedTotal
       : null;
   const impliedSpreadPercent =
-    impliedSpread !== null && estimatedResaleValue
-      ? Math.round((impliedSpread / estimatedResaleValue) * 1000) / 10
+    impliedSpread !== null && scoringResaleValue
+      ? Math.round((impliedSpread / scoringResaleValue) * 1000) / 10
       : null;
+
+  function applyResaleFacts(facts: PropertyFact[]) {
+    updateDraft(refreshResaleFacts({ ...draft, facts }));
+  }
 
   function updateResaleNumber(
     factKey: string,
     label: string,
     value: number | null
   ) {
-    updateDraft({
-      facts: upsertNumberFact(
+    applyResaleFacts(
+      upsertNumberFact(
         draft.facts,
         factKey,
         label,
@@ -4234,19 +4286,100 @@ function ResaleTab({
         "user_entered",
         "Resale support"
       )
-    });
+    );
   }
 
   function updateResaleString(factKey: string, label: string, value: string) {
-    updateDraft({
-      facts: upsertStringFact(
+    applyResaleFacts(
+      upsertStringFact(draft.facts, factKey, label, value, "Resale support")
+    );
+  }
+
+  function addComp() {
+    const compId = Date.now().toString();
+    const facts = [
+      ...draft.facts,
+      createPropertyFact({
+        factKey: `resale.comp.${compId}.address`,
+        label: "Comp address",
+        value: "",
+        sourceType: "user_entered",
+        sourceReference: "Comparable sale",
+        confidence: 1,
+        verified: true
+      }),
+      createPropertyFact({
+        factKey: `resale.comp.${compId}.sale_price`,
+        label: "Comp sale price",
+        value: null,
+        sourceType: "user_entered",
+        sourceReference: "Comparable sale",
+        confidence: 1,
+        verified: true
+      }),
+      createPropertyFact({
+        factKey: `resale.comp.${compId}.sqft`,
+        label: "Comp sqft",
+        value: null,
+        sourceType: "user_entered",
+        sourceReference: "Comparable sale",
+        confidence: 1,
+        verified: true
+      })
+    ];
+
+    applyResaleFacts(facts);
+  }
+
+  function updateCompNumber(
+    comp: ResaleCompItem,
+    field: "sale_price" | "sqft" | "distance_miles",
+    label: string,
+    value: number | null
+  ) {
+    applyResaleFacts(
+      upsertNumberFact(
         draft.facts,
-        factKey,
+        `resale.comp.${comp.id}.${field}`,
         label,
         value,
-        "Resale support"
+        "user_entered",
+        "Comparable sale"
       )
-    });
+    );
+  }
+
+  function updateCompString(
+    comp: ResaleCompItem,
+    field: "address" | "confidence" | "notes",
+    label: string,
+    value: string
+  ) {
+    applyResaleFacts(
+      upsertStringFact(
+        draft.facts,
+        `resale.comp.${comp.id}.${field}`,
+        label,
+        value,
+        "Comparable sale"
+      )
+    );
+  }
+
+  function removeComp(comp: ResaleCompItem) {
+    applyResaleFacts(
+      draft.facts.filter(
+        (fact) => !fact.factKey.startsWith(`resale.comp.${comp.id}.`)
+      )
+    );
+  }
+
+  function useSuggestedResaleValue() {
+    updateResaleNumber(
+      "resale.estimated_value",
+      resaleFactLabels.estimatedValue,
+      resaleSummary.suggestedResaleValue
+    );
   }
 
   return (
@@ -4254,30 +4387,49 @@ function ResaleTab({
       <Section title="Resale Support">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <NumberField
-            label="Estimated Resale Value"
+            label="Resale Value Override"
             value={estimatedResaleValue}
             onChange={(value) =>
               updateResaleNumber(
                 "resale.estimated_value",
-                "Estimated resale value",
+                resaleFactLabels.estimatedValue,
                 value
               )
             }
           />
-          <NumberField
-            label="Comps Reviewed"
-            value={compCount}
-            onChange={(value) =>
-              updateResaleNumber("resale.comp_count", "Comps reviewed", value)
-            }
+          <InvestmentMetric
+            label="Suggested Resale"
+            value={resaleSummary.suggestedResaleValue}
           />
+          <InvestmentMetric
+            label="Scoring Resale Value"
+            value={scoringResaleValue}
+          />
+          <InvestmentMetric
+            label="Median Comp $/Sqft"
+            value={resaleSummary.medianPricePerSqft}
+          />
+          <InvestmentMetric
+            label="Average Comp $/Sqft"
+            value={resaleSummary.averagePricePerSqft}
+          />
+          <InvestmentMetric label="Projected Total" value={projectedTotal} />
+          <InvestmentMetric label="Implied Spread" value={impliedSpread} />
+          <div className="rounded-md border border-border bg-card px-3 py-2">
+            <div className="text-xs font-medium uppercase text-muted-foreground">
+              Comp Count
+            </div>
+            <div className="mt-1 text-lg font-semibold">
+              {compCount ?? resaleSummary.usableComps.length}
+            </div>
+          </div>
           <Field label="Resale Confidence">
             <Select
               value={resaleConfidence || "unknown"}
               onChange={(event) =>
                 updateResaleString(
                   "resale.confidence",
-                  "Resale confidence",
+                  resaleFactLabels.confidence,
                   event.target.value === "unknown" ? "" : event.target.value
                 )
               }
@@ -4288,8 +4440,6 @@ function ResaleTab({
               <option value="high">High</option>
             </Select>
           </Field>
-          <InvestmentMetric label="Projected Total" value={projectedTotal} />
-          <InvestmentMetric label="Implied Spread" value={impliedSpread} />
           <div className="rounded-md border border-border bg-card px-3 py-2">
             <div className="text-xs font-medium uppercase text-muted-foreground">
               Spread %
@@ -4303,13 +4453,144 @@ function ResaleTab({
         </div>
       </Section>
 
+      <Section
+        title="Comparable Sales"
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={useSuggestedResaleValue}
+              disabled={resaleSummary.suggestedResaleValue === null}
+            >
+              <BadgeDollarSign aria-hidden="true" />
+              Use Suggested
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={addComp}>
+              <Plus aria-hidden="true" />
+              Add Comp
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-3">
+          {resaleSummary.comps.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+              No comparable sales recorded.
+            </div>
+          ) : (
+            resaleSummary.comps.map((comp) => (
+              <div
+                key={comp.id}
+                className="grid gap-3 rounded-md border border-border bg-card p-3 xl:grid-cols-[minmax(180px,1.4fr)_140px_110px_110px_130px_44px]"
+              >
+                <Field label="Address">
+                  <Input
+                    value={comp.address}
+                    onChange={(event) =>
+                      updateCompString(
+                        comp,
+                        "address",
+                        "Comp address",
+                        event.target.value
+                      )
+                    }
+                  />
+                </Field>
+                <NumberField
+                  label="Sale Price"
+                  value={comp.salePrice}
+                  onChange={(value) =>
+                    updateCompNumber(
+                      comp,
+                      "sale_price",
+                      "Comp sale price",
+                      value
+                    )
+                  }
+                />
+                <NumberField
+                  label="Sqft"
+                  value={comp.sqft}
+                  onChange={(value) =>
+                    updateCompNumber(comp, "sqft", "Comp sqft", value)
+                  }
+                />
+                <NumberField
+                  label="Distance"
+                  value={comp.distanceMiles}
+                  step="0.1"
+                  onChange={(value) =>
+                    updateCompNumber(
+                      comp,
+                      "distance_miles",
+                      "Comp distance",
+                      value
+                    )
+                  }
+                />
+                <Field label="Confidence">
+                  <Select
+                    value={comp.confidence || "unknown"}
+                    onChange={(event) =>
+                      updateCompString(
+                        comp,
+                        "confidence",
+                        "Comp confidence",
+                        event.target.value === "unknown"
+                          ? ""
+                          : event.target.value
+                      )
+                    }
+                  >
+                    <option value="unknown">Unknown</option>
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                  </Select>
+                </Field>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    onClick={() => removeComp(comp)}
+                    title="Remove comp"
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </Button>
+                </div>
+                <InvestmentMetric
+                  label="Comp $/Sqft"
+                  value={getResaleCompPricePerSqft(comp)}
+                />
+                <Field label="Notes" className="xl:col-span-5">
+                  <Textarea
+                    value={comp.notes}
+                    onChange={(event) =>
+                      updateCompString(
+                        comp,
+                        "notes",
+                        "Comp notes",
+                        event.target.value
+                      )
+                    }
+                  />
+                </Field>
+              </div>
+            ))
+          )}
+        </div>
+      </Section>
+
       <Section title="Comp Notes">
         <Textarea
           value={compNotes}
           onChange={(event) =>
             updateResaleString(
               "resale.comp_notes",
-              "Comparable sale notes",
+              resaleFactLabels.compNotes,
               event.target.value
             )
           }

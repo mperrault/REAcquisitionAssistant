@@ -678,6 +678,65 @@ describe("property scoring", () => {
     );
   });
 
+  it("uses suggested comp resale value when no override is entered", () => {
+    const property = createPropertyRecord({
+      id: "property-suggested-resale-spread",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 300000,
+      livingSqft: 1500,
+      facts: [
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 50000
+        }),
+        createPropertyFact({
+          id: "fact-closing",
+          factKey: "finance.closing_costs",
+          label: "Closing and acquisition costs",
+          value: 10000
+        }),
+        createPropertyFact({
+          id: "fact-comp-count",
+          factKey: "resale.comp_count",
+          label: "Comps reviewed",
+          value: 2
+        }),
+        createPropertyFact({
+          id: "fact-suggested-resale",
+          factKey: "resale.suggested_value",
+          label: "Suggested resale value",
+          value: 450000
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-09-08T08:23:30.000Z",
+      () => "score-suggested-resale-spread"
+    );
+
+    expect(evaluation.positiveFactors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "resale.estimated_spread",
+          result: "bonus",
+          points: 7.2
+        })
+      ])
+    );
+    expect(evaluation.badges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Comp Supported" }),
+        expect.objectContaining({ label: "Strong Spread" })
+      ])
+    );
+  });
+
   it("penalizes thin resale spread against projected investment", () => {
     const property = createPropertyRecord({
       id: "property-thin-resale-spread",
