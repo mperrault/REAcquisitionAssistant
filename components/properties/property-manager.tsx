@@ -1794,6 +1794,25 @@ export function PropertyManager() {
         latestEvaluation.scoringEngineVersion !== scoringEngineVersion)
   );
   const canSave = Boolean(draft && (isDirty || needsScoreRefresh));
+  const visibleEvaluation = React.useMemo(() => {
+    if (!draft || !activeProfile) {
+      return latestEvaluation;
+    }
+
+    if (!isDirty && !needsScoreRefresh && latestEvaluation) {
+      return latestEvaluation;
+    }
+
+    return evaluateProperty(
+      draft,
+      activeProfile,
+      new Date().toISOString(),
+      () => `draft-score-${draft.id}-${activeProfile.id}`
+    );
+  }, [activeProfile, draft, isDirty, latestEvaluation, needsScoreRefresh]);
+  const isDraftEvaluation = Boolean(
+    draft && activeProfile && visibleEvaluation && (isDirty || needsScoreRefresh)
+  );
 
   const propertyListResult = React.useMemo(
     () =>
@@ -2841,42 +2860,43 @@ export function PropertyManager() {
                         Total {formatCurrency(getProjectedTotalInvestment(draft))}
                       </Badge>
                       <Badge variant="outline">{draft.facts.length} facts</Badge>
-                      {latestEvaluation ? (
+                      {visibleEvaluation ? (
                         <Badge
-                          variant={getScoreBadgeVariant(latestEvaluation)}
-                          title={formatScoreSummaryTitle(latestEvaluation)}
+                          variant={getScoreBadgeVariant(visibleEvaluation)}
+                          title={formatScoreSummaryTitle(visibleEvaluation)}
                         >
-                          Score {latestEvaluation.normalizedScore}/100
+                          {isDraftEvaluation ? "Draft score" : "Score"}{" "}
+                          {visibleEvaluation.normalizedScore}/100
                         </Badge>
                       ) : activeProfile ? (
                         <Badge variant="outline">No score</Badge>
                       ) : null}
-                      {latestEvaluation ? (
+                      {visibleEvaluation ? (
                         <Badge
                           variant="outline"
-                          title={formatScoreSummaryTitle(latestEvaluation)}
+                          title={formatScoreSummaryTitle(visibleEvaluation)}
                         >
-                          {latestEvaluation.scoreLabel}
+                          {visibleEvaluation.scoreLabel}
                         </Badge>
                       ) : null}
-                      {latestEvaluation?.hardRejected ? (
+                      {visibleEvaluation?.hardRejected ? (
                         <Badge
                           variant="destructive"
-                          title={latestEvaluation.hardRejectReasons
+                          title={visibleEvaluation.hardRejectReasons
                             .map((reason) => reason.detail)
                             .join("\n")}
                         >
                           Rejected by Scoring Setup
                         </Badge>
                       ) : null}
-                      {latestEvaluation &&
-                      latestEvaluation.missingData.length > 0 ? (
+                      {visibleEvaluation &&
+                      visibleEvaluation.missingData.length > 0 ? (
                         <Badge
                           variant="warning"
-                          title={latestEvaluation.missingData.join("\n")}
+                          title={visibleEvaluation.missingData.join("\n")}
                         >
                           {formatScoreGapCount(
-                            latestEvaluation.missingData.length
+                            visibleEvaluation.missingData.length
                           )}
                         </Badge>
                       ) : null}
@@ -3005,7 +3025,8 @@ export function PropertyManager() {
                 {activeTab === "scoring" ? (
                   <ScoringTab
                     activeProfile={activeProfile}
-                    evaluation={latestEvaluation}
+                    evaluation={visibleEvaluation}
+                    isDraftEvaluation={isDraftEvaluation}
                   />
                 ) : null}
               </>
@@ -4694,10 +4715,12 @@ function NotesTab({
 
 function ScoringTab({
   activeProfile,
-  evaluation
+  evaluation,
+  isDraftEvaluation
 }: {
   activeProfile: SearchProfile | null;
   evaluation: ScoreEvaluation | undefined;
+  isDraftEvaluation: boolean;
 }) {
   const categoryMaxScores = React.useMemo(
     () =>
@@ -4721,6 +4744,7 @@ function ScoringTab({
           <ScoreEvaluationPanel
             evaluation={evaluation}
             categoryMaxScores={categoryMaxScores}
+            isPreview={isDraftEvaluation}
           />
         ) : (
           <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">

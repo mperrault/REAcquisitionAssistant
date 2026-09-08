@@ -165,6 +165,16 @@ describe("property photo workflow regression guards", () => {
     expect(block).toContain("value: parseFactValue(event.target.value)");
   });
 
+  it("recalculates a draft score for immediate scoring feedback", () => {
+    const source = readPropertyManagerSource();
+
+    expect(source).toContain("const visibleEvaluation = React.useMemo");
+    expect(source).toContain("draft-score-${draft.id}-${activeProfile.id}");
+    expect(source).toContain("isDraftEvaluation");
+    expect(source).toContain("isPreview={isDraftEvaluation}");
+    expect(source).toContain('isDraftEvaluation ? "Draft score" : "Score"');
+  });
+
   it("uses the filtered copy only for the enrichment request", () => {
     const source = readPropertyManagerSource();
     const start = source.indexOf("async function handleEnrichProperty");
