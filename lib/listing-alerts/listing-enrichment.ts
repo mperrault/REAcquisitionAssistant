@@ -116,6 +116,7 @@ type RenovationInference = {
 type SettingInference = Array<z.infer<typeof inferredFactSchema>>;
 
 const noPreferredSettingMatchFactKey = "setting.no_preferred_match";
+const defaultStylePhotoLimit = 8;
 
 function isNoPreferredSettingMatchFact(fact: z.infer<typeof inferredFactSchema>) {
   return fact.factKey === noPreferredSettingMatchFactKey;
@@ -123,6 +124,19 @@ function isNoPreferredSettingMatchFact(fact: z.infer<typeof inferredFactSchema>)
 
 function getPreferredSettingFacts(settingFacts: SettingInference) {
   return settingFacts.filter((fact) => !isNoPreferredSettingMatchFact(fact));
+}
+
+function getConfiguredStylePhotoLimit() {
+  const configuredLimit = Number.parseInt(
+    process.env.OPENAI_STYLE_PHOTO_LIMIT?.trim() || "",
+    10
+  );
+
+  if (!Number.isFinite(configuredLimit)) {
+    return defaultStylePhotoLimit;
+  }
+
+  return Math.max(1, Math.min(16, configuredLimit));
 }
 
 function addSettingCoverageFact(
@@ -1267,7 +1281,10 @@ async function inferHouseStyleFromPhotos(
   signal?: AbortSignal
 ): Promise<{ style: StyleInference | null; warning: string | null }> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
-  const imageUrls = getEligibleVisionImageUrls(photoUrls).slice(0, 3);
+  const imageUrls = getEligibleVisionImageUrls(photoUrls).slice(
+    0,
+    getConfiguredStylePhotoLimit()
+  );
 
   if (imageUrls.length === 0) {
     return {
@@ -1388,13 +1405,19 @@ async function inferStyleFromRequestEvidence({
   }
 
   const eligiblePhotoCount = getEligibleVisionImageUrls(requestPhotoUrls).length;
+  const analyzedPhotoCount = Math.min(
+    eligiblePhotoCount,
+    getConfiguredStylePhotoLimit()
+  );
   addDiagnostic(
     "style photos",
     eligiblePhotoCount > 0 ? "started" : "skipped",
     eligiblePhotoCount > 0
       ? "Running photo style inference from saved candidate photos."
       : "Photo style inference has no eligible saved photo URLs.",
-    `Eligible photos: ${eligiblePhotoCount}`
+    eligiblePhotoCount > 0
+      ? `Analyzing ${analyzedPhotoCount} of ${eligiblePhotoCount} eligible saved photos.`
+      : "Eligible photos: 0"
   );
 
   const photoInference = await inferHouseStyleFromPhotos(

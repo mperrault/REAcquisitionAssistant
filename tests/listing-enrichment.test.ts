@@ -804,6 +804,78 @@ describe("listing page enrichment", () => {
     }
   });
 
+  it("uses up to eight eligible saved photos for style inference by default", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    const originalStylePhotoLimit = process.env.OPENAI_STYLE_PHOTO_LIMIT;
+    const imageRequestCounts: number[] = [];
+
+    process.env.OPENAI_API_KEY = "test-key";
+    delete process.env.OPENAI_STYLE_PHOTO_LIMIT;
+
+    try {
+      const result = await enrichListingCandidate(
+        {
+          ...baseCandidate,
+          inferStyle: true,
+          photoUrls: Array.from(
+            { length: 12 },
+            (_, index) =>
+              `https://photos.zillowstatic.com/fp/${String(index + 1).padStart(
+                8,
+                "0"
+              )}abcdef-cc_ft_1344.webp`
+          )
+        },
+        async (input, init) => {
+          const url = String(input);
+
+          if (url.includes("api.openai.com")) {
+            const body = JSON.parse(String(init?.body ?? "{}"));
+            const content = body.input?.[0]?.content ?? [];
+
+            imageRequestCounts.push(
+              content.filter(
+                (item: { type?: string }) => item.type === "input_image"
+              ).length
+            );
+
+            return createJsonResponse({
+              output_text: JSON.stringify({
+                houseStyle: "Colonial",
+                confidence: 0.72,
+                evidence: "Two-story symmetrical front elevation is visible."
+              })
+            });
+          }
+
+          return createFetchResponse("Too Many Requests", 429);
+        }
+      );
+
+      expect(result.updates.houseStyle).toBe("Colonial");
+      expect(imageRequestCounts[0]).toBe(8);
+      expect(
+        result.diagnostics.some(
+          (item) =>
+            item.stage === "style photos" &&
+            item.detail === "Analyzing 8 of 12 eligible saved photos."
+        )
+      ).toBe(true);
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+
+      if (originalStylePhotoLimit === undefined) {
+        delete process.env.OPENAI_STYLE_PHOTO_LIMIT;
+      } else {
+        process.env.OPENAI_STYLE_PHOTO_LIMIT = originalStylePhotoLimit;
+      }
+    }
+  });
+
   it("returns an explicit warning when the listing page blocks fetches", async () => {
     const result = await enrichListingCandidate(baseCandidate, async () =>
       createFetchResponse("Too Many Requests", 429)

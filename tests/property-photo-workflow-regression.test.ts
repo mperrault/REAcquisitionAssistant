@@ -30,6 +30,38 @@ describe("property photo workflow regression guards", () => {
     expect(block).not.toContain("click Save to persist");
   });
 
+  it("can replace stale attached browser-capture photos", () => {
+    const source = readPropertyManagerSource();
+    const start = source.indexOf("function handleReplaceAttachedCapturedPhotos");
+    const end = source.indexOf("function handleClearAttachedCapturedPhotos", start);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+
+    const block = source.slice(start, end);
+
+    expect(block).toContain("removeBrowserCaptureEvidence(draft)");
+    expect(block).toContain("applyCaptureToProperty(cleanedProperty, capture)");
+    expect(block).toContain("savePropertyState(");
+    expect(block).toContain("Captured photo evidence replaced.");
+  });
+
+  it("shows browser-capture filtering counts in Sources", () => {
+    const source = readPropertyManagerSource();
+    const start = source.indexOf("function SourcesTab");
+    const end = source.indexOf("function FactsTab", start);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+
+    const block = source.slice(start, end);
+
+    expect(block).toContain("summarizeCapturePhotoSelection({");
+    expect(block).toContain("photoSummary.rejectedCount");
+    expect(block).toContain("filtered");
+    expect(block).toContain("detected");
+  });
+
   it("preserves property photos and source captures through Enhance", () => {
     const source = readPropertyManagerSource();
     const start = source.indexOf("async function handleEnrichProperty");
@@ -48,6 +80,18 @@ describe("property photo workflow regression guards", () => {
     expect(block).toContain("...preservedPhotoUrls");
     expect(block).toContain("photoEvidence: preservedPhotoEvidence");
     expect(block).toContain("sourceCaptures: preservedSourceCaptures");
+  });
+
+  it("shows photo input diagnostics when Enhance starts", () => {
+    const source = readPropertyManagerSource();
+    const start = source.indexOf("async function handleEnrichProperty");
+    const end = source.indexOf("function handleCancelEnrichment", start);
+    const block = source.slice(start, end);
+
+    expect(block).toContain('"photo inputs"');
+    expect(block).toContain("Saved property photos:");
+    expect(block).toContain("Attached photo evidence:");
+    expect(block).toContain("Latest focused browser-capture photos:");
   });
 
   it("uses the filtered copy only for the enrichment request", () => {

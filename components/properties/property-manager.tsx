@@ -43,7 +43,8 @@ import {
   type BrowserCaptureRecord,
   browserCaptureListResponseSchema,
   normalizePhotoUrls,
-  selectCapturePhotoUrls
+  selectCapturePhotoUrls,
+  summarizeCapturePhotoSelection
 } from "@/lib/properties/browser-capture";
 import {
   PROPERTY_STORAGE_KEY,
@@ -945,6 +946,36 @@ function removeListingPagePhotoEvidence(
     primaryPhotoUrl,
     photoUrls,
     photoEvidence
+  };
+}
+
+function removeBrowserCaptureEvidence(property: PropertyRecord): PropertyRecord {
+  const capturedPhotoUrls = new Set(
+    property.photoEvidence
+      .filter((photo) => photo.sourceType === "browser_capture")
+      .map((photo) => photo.url)
+  );
+
+  if (capturedPhotoUrls.size === 0 && property.sourceCaptures.length === 0) {
+    return property;
+  }
+
+  const photoEvidence = property.photoEvidence.filter(
+    (photo) => photo.sourceType !== "browser_capture"
+  );
+  const photoUrls = property.photoUrls.filter(
+    (photoUrl) => !capturedPhotoUrls.has(photoUrl)
+  );
+  const primaryPhotoUrl = capturedPhotoUrls.has(property.primaryPhotoUrl)
+    ? photoUrls[0] ?? photoEvidence[0]?.url ?? ""
+    : property.primaryPhotoUrl;
+
+  return {
+    ...property,
+    primaryPhotoUrl,
+    photoUrls,
+    photoEvidence,
+    sourceCaptures: []
   };
 }
 
@@ -1912,39 +1943,75 @@ export function PropertyManager() {
     );
   }
 
+  function handleReplaceAttachedCapturedPhotos(captureId: string) {
+    if (!draft) {
+      return;
+    }
+
+    const capture = browserCaptures.find((item) => item.id === captureId);
+
+    if (!capture) {
+      setCaptureStatus("Capture not found");
+      return;
+    }
+
+    const focusedPhotoUrls = getFocusedCapturePhotoUrls(capture, draft);
+
+    if (focusedPhotoUrls.length === 0) {
+      setCaptureStatus("No focused-property photos found for this capture");
+      return;
+    }
+
+    const cleanedProperty = removeBrowserCaptureEvidence(draft);
+    const capturedProperty = applyCaptureToProperty(cleanedProperty, capture);
+    const nextProperty = {
+      ...capturedProperty,
+      enrichmentDiagnostics: [
+        ...capturedProperty.enrichmentDiagnostics,
+        createPropertyDiagnostic(
+          "source capture",
+          "success",
+          "Captured photo evidence replaced.",
+          `Replaced browser-captured evidence with ${focusedPhotoUrls.length} focused photo URL${
+            focusedPhotoUrls.length === 1 ? "" : "s"
+          }.`
+        )
+      ].slice(-80)
+    };
+    const nextPropertyState = upsertProperty(propertyState, nextProperty);
+    const persistedState = savePropertyState(window.localStorage, nextPropertyState);
+    const savedProperty =
+      persistedState.properties.find((property) => property.id === nextProperty.id) ??
+      nextProperty;
+
+    setPropertyState(persistedState);
+    setDraft(cloneProperty(savedProperty));
+    setSelectedPropertyId(savedProperty.id);
+    setLoadSource("storage");
+    setSaveStatus("Captured photos replaced");
+    setCaptureStatus(
+      `Replaced attached captured photos with ${focusedPhotoUrls.length} photo URL${
+        focusedPhotoUrls.length === 1 ? "" : "s"
+      }`
+    );
+  }
+
   function handleClearAttachedCapturedPhotos() {
     if (!draft) {
       return;
     }
 
-    const capturedPhotoUrls = new Set(
-      draft.photoEvidence
-        .filter((photo) => photo.sourceType === "browser_capture")
-        .map((photo) => photo.url)
-    );
+    const removedPhotoCount = draft.photoEvidence.filter(
+      (photo) => photo.sourceType === "browser_capture"
+    ).length;
 
-    if (capturedPhotoUrls.size === 0 && draft.sourceCaptures.length === 0) {
+    if (removedPhotoCount === 0 && draft.sourceCaptures.length === 0) {
       setCaptureStatus("No attached captured photos");
       return;
     }
 
-    const photoUrls = draft.photoUrls.filter(
-      (photoUrl) => !capturedPhotoUrls.has(photoUrl)
-    );
-    const primaryPhotoUrl = capturedPhotoUrls.has(draft.primaryPhotoUrl)
-      ? photoUrls[0] ?? ""
-      : draft.primaryPhotoUrl;
-    const removedPhotoCount = draft.photoEvidence.filter(
-      (photo) => photo.sourceType === "browser_capture"
-    ).length;
     const nextProperty = {
-      ...draft,
-      primaryPhotoUrl,
-      photoUrls,
-      photoEvidence: draft.photoEvidence.filter(
-        (photo) => photo.sourceType !== "browser_capture"
-      ),
-      sourceCaptures: [],
+      ...removeBrowserCaptureEvidence(draft),
       enrichmentDiagnostics: [
         ...draft.enrichmentDiagnostics,
         createPropertyDiagnostic(
@@ -1986,6 +2053,15 @@ export function PropertyManager() {
     const preservedSourceCaptures = propertyDraft.sourceCaptures.map((capture) => ({
       ...capture
     }));
+    const latestMatchingCapture = browserCaptures
+      .filter((capture) => captureMatchesProperty(capture, propertyDraft))
+      .sort(
+        (a, b) =>
+          new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime()
+      )[0];
+    const latestFocusedCapturePhotoUrls = latestMatchingCapture
+      ? getFocusedCapturePhotoUrls(latestMatchingCapture, propertyDraft)
+      : [];
     const enrichmentCandidateProperty =
       removeListingPagePhotoEvidence(propertyDraft);
     let diagnostics: PropertyEnrichmentDiagnostic[] = [
@@ -1994,6 +2070,24 @@ export function PropertyManager() {
         "started",
         "Requesting listing enrichment.",
         propertyDraft.listingUrl
+      ),
+      createPropertyDiagnostic(
+        "photo inputs",
+        preservedPhotoUrls.length > 0 || latestFocusedCapturePhotoUrls.length > 0
+          ? "info"
+          : "warning",
+        "Preparing photo inputs for enrichment.",
+        [
+          `Saved property photos: ${propertyDraft.photoUrls.length}`,
+          `Attached photo evidence: ${preservedPhotoEvidence.length}`,
+          `Attached source captures: ${preservedSourceCaptures.length}`,
+          `Latest focused browser-capture photos: ${latestFocusedCapturePhotoUrls.length}`,
+          latestMatchingCapture
+            ? `Latest capture: ${
+                latestMatchingCapture.sourceSite || "Unknown source"
+              } at ${formatCaptureDateTime(latestMatchingCapture.capturedAt)}`
+            : "Latest capture: none matching this property"
+        ].join("\n")
       )
     ];
     const appendDiagnostic = (diagnostic: PropertyEnrichmentDiagnostic) => {
@@ -2820,6 +2914,7 @@ export function PropertyManager() {
                       handleClearAttachedCapturedPhotos
                     }
                     onAttachCapture={handleAttachCapture}
+                    onReplaceCapture={handleReplaceAttachedCapturedPhotos}
                   />
                 ) : null}
                 {activeTab === "facts" ? (
@@ -2844,7 +2939,7 @@ export function PropertyManager() {
                 ) : null}
                 {activeTab === "scoring" ? (
                   <ScoringTab
-                    activeProfileName={activeProfile?.name ?? null}
+                    activeProfile={activeProfile}
                     evaluation={latestEvaluation}
                   />
                 ) : null}
@@ -3159,7 +3254,8 @@ function SourcesTab({
   onCopyBookmarklet,
   onClearCaptures,
   onClearAttachedCapturedPhotos,
-  onAttachCapture
+  onAttachCapture,
+  onReplaceCapture
 }: {
   draft: PropertyRecord;
   browserCaptures: BrowserCaptureRecord[];
@@ -3170,6 +3266,7 @@ function SourcesTab({
   onClearCaptures: () => void;
   onClearAttachedCapturedPhotos: () => void;
   onAttachCapture: (captureId: string) => void;
+  onReplaceCapture: (captureId: string) => void;
 }) {
   const bookmarkletCode = React.useMemo(createBrowserCaptureBookmarklet, []);
   const sourceListingUrl = getPropertySourceListingUrl(draft);
@@ -3182,7 +3279,12 @@ function SourcesTab({
         .filter((capture) => captureMatchesProperty(capture, draft))
         .map((capture) => ({
           capture,
-          photoUrls: getFocusedCapturePhotoUrls(capture, draft)
+          photoSummary: summarizeCapturePhotoSelection({
+            sourceSite: capture.sourceSite,
+            addressLine1: draft.addressLine1 || capture.addressLine1,
+            photoDetails: capture.photoDetails,
+            photoUrls: capture.photoUrls
+          })
         }))
         .sort(
           (a, b) =>
@@ -3309,7 +3411,9 @@ function SourcesTab({
             </div>
           ) : (
             <div className="grid gap-3">
-              {focusedCaptures.map(({ capture, photoUrls }) => {
+              {focusedCaptures.map(({ capture, photoSummary }) => {
+                const photoUrls = photoSummary.acceptedUrls;
+
                 return (
                   <div
                     key={capture.id}
@@ -3326,6 +3430,11 @@ function SourcesTab({
                             {photoUrls.length} focused photo
                             {photoUrls.length === 1 ? "" : "s"}
                           </Badge>
+                          {photoSummary.rejectedCount > 0 ? (
+                            <Badge variant="warning">
+                              {photoSummary.rejectedCount} filtered
+                            </Badge>
+                          ) : null}
                           <span className="text-xs text-muted-foreground">
                             {formatCaptureDateTime(capture.capturedAt)}
                           </span>
@@ -3349,22 +3458,36 @@ function SourcesTab({
                           {capture.pageUrl}
                         </a>
                       </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => onAttachCapture(capture.id)}
-                        disabled={photoUrls.length === 0}
-                      >
-                        <Plus aria-hidden="true" />
-                        Attach
-                      </Button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onReplaceCapture(capture.id)}
+                          disabled={photoUrls.length === 0}
+                          title="Clear existing browser-captured evidence and attach this capture"
+                        >
+                          <RefreshCw aria-hidden="true" />
+                          Replace
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => onAttachCapture(capture.id)}
+                          disabled={photoUrls.length === 0}
+                        >
+                          <Plus aria-hidden="true" />
+                          Attach
+                        </Button>
+                      </div>
                     </div>
 
                     {photoUrls.length > 0 ? (
                       <div className="mt-3 grid gap-2">
                         <div className="text-xs text-muted-foreground">
                           Showing all {photoUrls.length} focused-property
-                          photos.
+                          photos from {photoSummary.detectedCount} detected
+                          image{photoSummary.detectedCount === 1 ? "" : "s"}.
                         </div>
                         <div className="max-h-[24rem] max-w-full overflow-auto overscroll-contain rounded-md border border-border p-2">
                           <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
@@ -4147,22 +4270,35 @@ function NotesTab({
 }
 
 function ScoringTab({
-  activeProfileName,
+  activeProfile,
   evaluation
 }: {
-  activeProfileName: string | null;
+  activeProfile: SearchProfile | null;
   evaluation: ScoreEvaluation | undefined;
 }) {
+  const categoryMaxScores = React.useMemo(
+    () =>
+      Object.fromEntries(
+        activeProfile?.categoryWeights
+          .filter((weight) => weight.enabled)
+          .map((weight) => [weight.categoryKey, weight.weight]) ?? []
+      ),
+    [activeProfile]
+  );
+
   return (
     <div className="grid gap-5">
       <Section title="Score Evaluation">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Badge variant="outline">
-            {activeProfileName ?? "No active profile"}
+            {activeProfile?.name ?? "No active profile"}
           </Badge>
         </div>
         {evaluation ? (
-          <ScoreEvaluationPanel evaluation={evaluation} />
+          <ScoreEvaluationPanel
+            evaluation={evaluation}
+            categoryMaxScores={categoryMaxScores}
+          />
         ) : (
           <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
             No score evaluation has been saved for this property and active profile.

@@ -77,9 +77,11 @@ function formatScoreGapCount(count: number) {
 }
 
 export function ScoreEvaluationPanel({
-  evaluation
+  evaluation,
+  categoryMaxScores
 }: {
   evaluation: ScoreEvaluation;
+  categoryMaxScores?: Partial<Record<string, number>>;
 }) {
   return (
     <div className="grid gap-4">
@@ -153,7 +155,10 @@ export function ScoreEvaluationPanel({
         </div>
       </div>
 
-      <CategoryScores evaluation={evaluation} />
+      <CategoryScores
+        evaluation={evaluation}
+        categoryMaxScores={categoryMaxScores}
+      />
 
       <ResultSection
         title="Hard Rejections"
@@ -201,9 +206,11 @@ function ScoreMetric({
 }
 
 function CategoryScores({
-  evaluation
+  evaluation,
+  categoryMaxScores
 }: {
   evaluation: ScoreEvaluation;
+  categoryMaxScores?: Partial<Record<string, number>>;
 }) {
   return (
     <div className="rounded-md border border-border bg-background">
@@ -211,24 +218,34 @@ function CategoryScores({
         Category Scores
       </div>
       <div className="grid gap-2 p-4 sm:grid-cols-2 lg:grid-cols-3">
-        {Object.entries(evaluation.categoryScores).map(([category, points]) => (
-          <div
-            key={category}
-            className="grid gap-2 rounded-md border border-border bg-card px-3 py-2"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <span className="truncate text-sm text-muted-foreground">
-                {formatCategoryLabel(category)}
-              </span>
-              <span className="shrink-0 text-sm font-semibold">
-                {formatPoints(points)}
-              </span>
+        {Object.entries(evaluation.categoryScores).map(([category, points]) => {
+          const maxPoints = categoryMaxScores?.[category] ?? null;
+
+          return (
+            <div
+              key={category}
+              className="grid gap-2 rounded-md border border-border bg-card px-3 py-2"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="truncate text-sm text-muted-foreground">
+                  {formatCategoryLabel(category)}
+                </span>
+                <span className="shrink-0 text-sm font-semibold">
+                  {formatPoints(points)}
+                  {maxPoints !== null ? (
+                    <span className="font-medium text-muted-foreground">
+                      {" "}
+                      / {maxPoints}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {getCategoryScoreDetail(evaluation, category, points)}
+              </div>
             </div>
-            <div className="text-xs text-muted-foreground">
-              {getCategoryScoreDetail(evaluation, category, points)}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
