@@ -169,6 +169,11 @@ const majorRenovationKeys = [
   "renovation.extensive_systems_replacement"
 ];
 
+const engineHandledFeatureKeys = new Set([
+  "financial.low_price_per_sqft",
+  "financial.very_low_price_per_sqft"
+]);
+
 function inferRenovationScopeFactKey(factKey: string, label: string) {
   if (!factKey.startsWith("renovation.line_item.")) {
     return null;
@@ -442,7 +447,7 @@ function evaluateLocation(
       );
     } else if (!hasCommuteAnchor) {
       missingData.push(
-        "Drive time is missing for commute scoring because the active profile has no commute anchor address or coordinates."
+        "Drive time is missing for commute scoring because the active scoring setup has no commute anchor address or coordinates."
       );
     } else if (!hasPropertyAddress) {
       missingData.push(
@@ -450,7 +455,7 @@ function evaluateLocation(
       );
     } else {
       missingData.push(
-        "Drive time is missing for commute scoring. Run Drive Time or Enrich to calculate it from the active profile commute anchor."
+        "Drive time is missing for commute scoring. Run Drive Time or Enrich to calculate it from the active scoring setup commute anchor."
       );
     }
 
@@ -553,7 +558,9 @@ function evaluateBudget(
     detail = "Projected total investment is above maximum.";
   }
 
-  const points = round(categoryWeight * 0.65 * fraction);
+  const projectBudgetPoints = round(categoryWeight * 0.65);
+  const valueBudgetPoints = round(categoryWeight - projectBudgetPoints);
+  const points = round(projectBudgetPoints * fraction);
   addCategoryScore(categoryScores, "financial", points, categoryWeight);
 
   if (fraction >= 0.7) {
@@ -573,6 +580,49 @@ function evaluateBudget(
       result: "penalty",
       points: round(points - categoryWeight),
       detail
+    });
+  }
+
+  const pricePerSqft = asNumber(facts.get("financial.price_per_sqft"));
+
+  if (pricePerSqft === null) {
+    return;
+  }
+
+  let valueFraction = 0.45;
+  let valueDetail = `$${pricePerSqft}/sqft is in the normal range.`;
+
+  if (pricePerSqft <= 220) {
+    valueFraction = 1;
+    valueDetail = `$${pricePerSqft}/sqft is very favorable.`;
+  } else if (pricePerSqft <= 275) {
+    valueFraction = 0.85;
+    valueDetail = `$${pricePerSqft}/sqft is favorable.`;
+  } else if (pricePerSqft > 325) {
+    valueFraction = 0.2;
+    valueDetail = `$${pricePerSqft}/sqft is expensive.`;
+  }
+
+  const valuePoints = round(valueBudgetPoints * valueFraction);
+  addCategoryScore(categoryScores, "financial", valuePoints, categoryWeight);
+
+  if (valueFraction >= 0.85) {
+    positiveFactors.push({
+      ruleKey: "finance.price_per_sqft_value",
+      label: "Price per sqft value",
+      category: "financial",
+      result: "bonus",
+      points: valuePoints,
+      detail: valueDetail
+    });
+  } else if (valueFraction <= 0.2) {
+    penalties.push({
+      ruleKey: "finance.price_per_sqft_value",
+      label: "Price per sqft value",
+      category: "financial",
+      result: "penalty",
+      points: round(valuePoints - valueBudgetPoints),
+      detail: valueDetail
     });
   }
 }
@@ -683,6 +733,10 @@ function evaluateFeaturePreferences(
 
   for (const preference of enabledFeatures) {
     if (preference.category === "renovation") {
+      continue;
+    }
+
+    if (engineHandledFeatureKeys.has(preference.featureKey)) {
       continue;
     }
 
@@ -871,7 +925,7 @@ function createScoreBadges(
 
 function scoreLabel(profile: SearchProfile, normalizedScore: number, hardRejected: boolean) {
   if (hardRejected) {
-    return "Rejected by Profile";
+    return "Rejected by Scoring Setup";
   }
 
   const threshold = profile.scoreThresholds

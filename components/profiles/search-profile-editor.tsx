@@ -154,6 +154,7 @@ export function SearchProfileEditor() {
   const visibleProfiles = profileState.profiles.filter(
     (profile) => !profile.isArchived
   );
+  const hasMultipleVisibleProfiles = visibleProfiles.length > 1;
 
   const isDirty =
     profileFingerprint(draft) !== profileFingerprint(selectedProfile ?? null);
@@ -396,11 +397,11 @@ export function SearchProfileEditor() {
             <Badge variant="outline">v{draft?.version ?? 1}</Badge>
           </div>
           <h1 className="text-2xl font-semibold tracking-normal sm:text-3xl">
-            Search Profiles
+            Scoring Settings
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            Configure acquisition preferences, deal breakers, weights, and score
-            labels.
+            Configure the active acquisition scoring setup, including weights,
+            value criteria, deal breakers, and score labels.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -430,22 +431,26 @@ export function SearchProfileEditor() {
         <aside className="h-fit rounded-md border border-border bg-card p-4 shadow-soft">
           <div className="mb-4 flex items-center justify-between gap-2">
             <div>
-              <h2 className="text-sm font-semibold">Profiles</h2>
+              <h2 className="text-sm font-semibold">Scoring Setup</h2>
               <p className="text-xs text-muted-foreground">
-                {visibleProfiles.length} active configuration
+                {hasMultipleVisibleProfiles
+                  ? `${visibleProfiles.length} saved configurations`
+                  : "Single active configuration"}
               </p>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleDuplicate}
-              disabled={!draft}
-              title="Duplicate selected profile"
-            >
-              <Copy aria-hidden="true" />
-              Copy
-            </Button>
+            {hasMultipleVisibleProfiles ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleDuplicate}
+                disabled={!draft}
+                title="Duplicate selected configuration"
+              >
+                <Copy aria-hidden="true" />
+                Copy
+              </Button>
+            ) : null}
           </div>
 
           <div className="space-y-2">
@@ -502,14 +507,12 @@ export function SearchProfileEditor() {
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
                 <h2 className="truncate text-xl font-semibold">
-                  {draft?.name ?? "No profile selected"}
+                  {draft?.name ?? "No scoring setup selected"}
                 </h2>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  {draft?.isActive ? (
-                    <Badge variant="success">Active</Badge>
-                  ) : (
-                    <Badge variant="outline">Inactive</Badge>
-                  )}
+                  <Badge variant={draft?.isActive ? "success" : "outline"}>
+                    {draft?.isActive ? "Active Setup" : "Inactive Setup"}
+                  </Badge>
                   <Badge variant="outline">
                     {draft?.townPreferences.length ?? 0} towns
                   </Badge>
@@ -518,26 +521,28 @@ export function SearchProfileEditor() {
                   </Badge>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleSetActive}
-                  disabled={!draft || draft.isActive}
-                >
-                  <CheckCircle2 aria-hidden="true" />
-                  Set Active
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleArchive}
-                  disabled={!draft}
-                >
-                  <Archive aria-hidden="true" />
-                  Archive
-                </Button>
-              </div>
+              {hasMultipleVisibleProfiles ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleSetActive}
+                    disabled={!draft || draft.isActive}
+                  >
+                    <CheckCircle2 aria-hidden="true" />
+                    Set Active
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleArchive}
+                    disabled={!draft}
+                  >
+                    <Archive aria-hidden="true" />
+                    Archive
+                  </Button>
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-5 flex flex-wrap gap-2">
@@ -619,7 +624,7 @@ function EmptyState() {
   return (
     <div className="flex min-h-64 flex-col items-center justify-center gap-3 rounded-md border border-dashed border-border bg-background p-8 text-center">
       <Search className="size-8 text-muted-foreground" aria-hidden="true" />
-      <div className="text-sm font-medium">No profile selected</div>
+      <div className="text-sm font-medium">No scoring setup selected</div>
     </div>
   );
 }
@@ -670,9 +675,9 @@ function OverviewTab({
 }) {
   return (
     <div className="grid gap-5">
-      <Section title="Profile">
+      <Section title="Scoring Setup">
         <div className="grid gap-4 lg:grid-cols-2">
-          <Field label="Profile Name">
+          <Field label="Setup Name">
             <Input
               value={draft.name}
               onChange={(event) => updateDraft({ name: event.target.value })}

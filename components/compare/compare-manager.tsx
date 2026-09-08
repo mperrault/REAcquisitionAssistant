@@ -78,7 +78,7 @@ function getActiveProfileName(profileState: ProfileState | null) {
     (profile) => profile.id === profileState.activeProfileId
   );
 
-  return activeProfile?.name ?? "No active profile";
+  return activeProfile?.name ?? "No active scoring setup";
 }
 
 function getScoreVariant(summary: DashboardPropertySummary) {

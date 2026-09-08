@@ -159,7 +159,7 @@ const triageOptions: Array<{ value: CandidateTriageFilter; label: string }> = [
   { value: "warnings", label: "Warnings" },
   { value: "outside_geography", label: "Outside Geography" },
   { value: "strong_score", label: "Strong Score" },
-  { value: "rejected_by_profile", label: "Rejected by Profile" }
+  { value: "rejected_by_profile", label: "Rejected by Scoring Setup" }
 ];
 
 const sortOptions: Array<{ value: CandidateSortMode; label: string }> = [

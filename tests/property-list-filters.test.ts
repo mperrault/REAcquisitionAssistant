@@ -79,7 +79,7 @@ describe("property list score filters", () => {
         id: "score-rejected",
         hardRejected: true,
         normalizedScore: 34,
-        scoreLabel: "Rejected by Profile",
+        scoreLabel: "Rejected by Scoring Setup",
         missingData: ["Renovation scope is missing."]
       })
     );

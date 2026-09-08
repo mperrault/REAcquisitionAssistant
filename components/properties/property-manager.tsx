@@ -1505,7 +1505,7 @@ function canCalculateDriveTime(
 function formatScoreSummaryTitle(evaluation: ScoreEvaluation) {
   const parts = [
     `${evaluation.scoreLabel}: ${evaluation.normalizedScore}/100`,
-    `Profile v${evaluation.profileVersion}`,
+    `Setup v${evaluation.profileVersion}`,
     `Evaluated ${formatEvaluationDateTime(evaluation.evaluatedAt)}`
   ];
 
@@ -2215,7 +2215,7 @@ export function PropertyManager() {
             "drive time",
             "started",
             "Calculating drive time.",
-            `Profile: ${activeProfile.name}`
+            `Scoring setup: ${activeProfile.name}`
           )
         );
         const driveTimeResponse = await fetch(
@@ -2289,7 +2289,7 @@ export function PropertyManager() {
             "Drive time calculation skipped.",
             canCalculateDriveTime(enrichedProperty, activeProfile)
               ? "Drive time was available but not requested."
-              : "Property address or active profile commute anchor is missing."
+              : "Property address or active scoring setup commute anchor is missing."
           )
         );
       } else {
@@ -2298,7 +2298,7 @@ export function PropertyManager() {
             "drive time",
             "skipped",
             "Drive time calculation skipped.",
-            "No active search profile is loaded."
+            "No active scoring setup is loaded."
           )
         );
       }
@@ -2309,7 +2309,7 @@ export function PropertyManager() {
             "scoring",
             "started",
             "Calculating score.",
-            `Profile: ${activeProfile.name}`
+            `Scoring setup: ${activeProfile.name}`
           )
         );
       }
@@ -2636,7 +2636,7 @@ export function PropertyManager() {
           </Button>
           <Button type="button" onClick={handleSave} disabled={!canSave}>
             <Save aria-hidden="true" />
-            Save
+            {activeProfile ? "Save + Score" : "Save"}
           </Button>
         </div>
       </div>
@@ -2811,7 +2811,7 @@ export function PropertyManager() {
                             .map((reason) => reason.detail)
                             .join("\n")}
                         >
-                          Rejected by Profile
+                          Rejected by Scoring Setup
                         </Badge>
                       ) : null}
                       {latestEvaluation &&
@@ -2839,7 +2839,11 @@ export function PropertyManager() {
                   }
                 >
                   <Sparkles aria-hidden="true" />
-                  {isEnrichingProperty ? "Enriching" : "Enrich"}
+                  {isEnrichingProperty
+                    ? "Enriching"
+                    : activeProfile
+                      ? "Enrich + Score"
+                      : "Enrich"}
                 </Button>
                 <Button
                   type="button"
@@ -2851,8 +2855,8 @@ export function PropertyManager() {
                   }
                   title={
                     canCalculateDriveTime(draft, activeProfile)
-                      ? "Calculate drive time from this property to the active profile commute anchor"
-                      : "Add a property address and active profile commute anchor first"
+                      ? "Calculate drive time from this property to the active scoring setup commute anchor"
+                      : "Add a property address and active scoring setup commute anchor first"
                   }
                 >
                   <MapPin aria-hidden="true" />
@@ -4291,7 +4295,7 @@ function ScoringTab({
       <Section title="Score Evaluation">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Badge variant="outline">
-            {activeProfile?.name ?? "No active profile"}
+            {activeProfile?.name ?? "No active scoring setup"}
           </Badge>
         </div>
         {evaluation ? (
@@ -4301,7 +4305,8 @@ function ScoringTab({
           />
         ) : (
           <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
-            No score evaluation has been saved for this property and active profile.
+            No score evaluation has been saved for this property and active
+            scoring setup.
           </div>
         )}
       </Section>

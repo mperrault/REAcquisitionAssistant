@@ -127,7 +127,7 @@ describe("property scoring", () => {
     );
 
     expect(evaluation.hardRejected).toBe(true);
-    expect(evaluation.scoreLabel).toBe("Rejected by Profile");
+    expect(evaluation.scoreLabel).toBe("Rejected by Scoring Setup");
     expect(evaluation.normalizedScore).toBeGreaterThan(0);
     expect(evaluation.hardRejectReasons).toEqual(
       expect.arrayContaining([
@@ -258,6 +258,54 @@ describe("property scoring", () => {
     );
     expect(evaluation.missingData).not.toContain(
       "Expected renovation cost is missing for total investment scoring."
+    );
+  });
+
+  it("scores favorable price per sqft as an explicit financial driver", () => {
+    const property = createPropertyRecord({
+      id: "property-price-per-sqft-value",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 275000,
+      livingSqft: 1400,
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 0
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-08-10T22:12:30.000Z",
+      () => "score-price-per-sqft-value"
+    );
+
+    expect(evaluation.positiveFactors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "finance.price_per_sqft_value",
+          result: "bonus",
+          detail: "$196/sqft is very favorable."
+        })
+      ])
+    );
+    expect(evaluation.positiveFactors).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "financial.low_price_per_sqft"
+        })
+      ])
     );
   });
 
@@ -413,6 +461,14 @@ describe("property scoring", () => {
         expect.objectContaining({ label: "Turnkey Candidate" })
       ])
     );
+    expect(evaluation.positiveFactors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "finance.price_per_sqft_value",
+          detail: "$254/sqft is favorable."
+        })
+      ])
+    );
   });
 
   it("does not warn when setting text was checked and no preferred setting matched", () => {
@@ -460,7 +516,7 @@ describe("property scoring", () => {
     expect(evaluation.missingData).toEqual(
       expect.arrayContaining([
         "Town/state are missing for location scoring.",
-        "Drive time is missing for commute scoring because the active profile has no commute anchor address or coordinates.",
+        "Drive time is missing for commute scoring because the active scoring setup has no commute anchor address or coordinates.",
         "Asking price or estimated purchase price is missing.",
         "Setting and view facts are missing.",
         "House style is missing.",

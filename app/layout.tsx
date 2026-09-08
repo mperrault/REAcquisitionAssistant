@@ -20,7 +20,7 @@ const navItems = [
   { href: "/listing-alerts", label: "Listing Alerts", icon: Inbox },
   { href: "/compare", label: "Compare", icon: Scale },
   { href: "/map", label: "Map", icon: Map },
-  { href: "/profiles", label: "Search Profiles", icon: Search },
+  { href: "/profiles", label: "Scoring Settings", icon: Search },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/reports", label: "Reports", icon: FileText },
   { href: "/settings", label: "Settings", icon: Settings }

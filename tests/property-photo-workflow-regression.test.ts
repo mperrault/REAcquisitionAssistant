@@ -94,6 +94,15 @@ describe("property photo workflow regression guards", () => {
     expect(block).toContain("Latest focused browser-capture photos:");
   });
 
+  it("makes automatic scoring visible in Save and Enrich labels", () => {
+    const source = readPropertyManagerSource();
+
+    expect(source).toContain('"Save + Score"');
+    expect(source).toContain('"Enrich + Score"');
+    expect(source).toContain("evaluateProperty(savedProperty, activeProfile)");
+    expect(source).toContain("evaluateProperty(enrichedProperty, activeProfile)");
+  });
+
   it("uses the filtered copy only for the enrichment request", () => {
     const source = readPropertyManagerSource();
     const start = source.indexOf("async function handleEnrichProperty");

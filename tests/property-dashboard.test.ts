@@ -86,7 +86,7 @@ describe("property dashboard summaries", () => {
       }),
       createEvaluation(rejected, {
         normalizedScore: 10,
-        scoreLabel: "Rejected by Profile",
+        scoreLabel: "Rejected by Scoring Setup",
         hardRejected: true,
         hardRejectReasons: [
           {
@@ -151,7 +151,7 @@ describe("property dashboard summaries", () => {
       }),
       createEvaluation(rejected, {
         normalizedScore: 95,
-        scoreLabel: "Rejected by Profile",
+        scoreLabel: "Rejected by Scoring Setup",
         hardRejected: true
       })
     ].reduce(addScoreEvaluation, createEmptyScoreState());

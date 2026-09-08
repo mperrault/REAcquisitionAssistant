@@ -10,7 +10,7 @@ import {
 import type { SearchProfile } from "@/lib/profiles/types";
 
 export const OUTSIDE_PROFILE_GEOGRAPHY_WARNING =
-  "Outside active profile geography.";
+  "Outside active scoring setup geography.";
 
 export type ListingCandidateGeographyFilterResult = {
   state: ListingAlertState;

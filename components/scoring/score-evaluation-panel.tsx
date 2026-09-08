@@ -94,7 +94,7 @@ export function ScoreEvaluationPanel({
               >
                 {evaluation.scoreLabel}
               </Badge>
-              <Badge variant="outline">Profile v{evaluation.profileVersion}</Badge>
+              <Badge variant="outline">Setup v{evaluation.profileVersion}</Badge>
               <Badge variant="outline">
                 Engine {evaluation.scoringEngineVersion}
               </Badge>
@@ -155,6 +155,8 @@ export function ScoreEvaluationPanel({
         </div>
       </div>
 
+      <ScoreDriverSummary evaluation={evaluation} />
+
       <CategoryScores
         evaluation={evaluation}
         categoryMaxScores={categoryMaxScores}
@@ -182,6 +184,103 @@ export function ScoreEvaluationPanel({
       />
 
       <ScoreGapsSection items={evaluation.missingData} />
+    </div>
+  );
+}
+
+function ScoreDriverSummary({
+  evaluation
+}: {
+  evaluation: ScoreEvaluation;
+}) {
+  const helped = evaluation.positiveFactors.slice(0, 3);
+  const hurt = [...evaluation.penalties, ...evaluation.hardRejectReasons].slice(
+    0,
+    3
+  );
+  const gaps = evaluation.missingData.slice(0, 3);
+
+  return (
+    <div className="rounded-md border border-border bg-background">
+      <div className="border-b border-border p-4 text-sm font-semibold">
+        Score Summary
+      </div>
+      <div className="grid gap-3 p-4 lg:grid-cols-3">
+        <ScoreSummaryColumn
+          title="What Helped"
+          items={helped.map((item) => ({
+            key: `${item.ruleKey}-${item.detail}`,
+            label: item.label,
+            badgeLabel: formatRulePoints(item),
+            detail: `${formatRulePoints(item)} · ${item.detail}`,
+            variant: "success" as BadgeVariant
+          }))}
+          emptyText="No positive scoring drivers matched."
+        />
+        <ScoreSummaryColumn
+          title="What Hurt"
+          items={hurt.map((item) => ({
+            key: `${item.ruleKey}-${item.result}-${item.detail}`,
+            label: item.label,
+            badgeLabel: formatRulePoints(item),
+            detail: `${formatRulePoints(item)} · ${item.detail}`,
+            variant: getRuleResultVariant(item)
+          }))}
+          emptyText="No penalties or hard rejections matched."
+        />
+        <ScoreSummaryColumn
+          title="What To Resolve"
+          items={gaps.map((item) => ({
+            key: item,
+            label: item,
+            badgeLabel: "Gap",
+            detail: "",
+            variant: "warning" as BadgeVariant
+          }))}
+          emptyText="No score gaps recorded."
+        />
+      </div>
+    </div>
+  );
+}
+
+function ScoreSummaryColumn({
+  title,
+  items,
+  emptyText
+}: {
+  title: string;
+  items: Array<{
+    key: string;
+    label: string;
+    badgeLabel: string;
+    detail: string;
+    variant: BadgeVariant;
+  }>;
+  emptyText: string;
+}) {
+  return (
+    <div className="grid content-start gap-2 rounded-md border border-border bg-card p-3">
+      <div className="text-xs font-medium uppercase text-muted-foreground">
+        {title}
+      </div>
+      {items.length > 0 ? (
+        items.map((item) => (
+          <div key={item.key} className="grid gap-1">
+            <div className="flex items-start justify-between gap-2">
+              <span className="text-sm font-medium">{item.label}</span>
+              <Badge variant={item.variant}>{item.badgeLabel}</Badge>
+            </div>
+            {item.detail ? (
+              <div className="text-xs text-muted-foreground">
+                {item.detail.replace(/^.*? · /, "")}
+              </div>
+            ) : null}
+          </div>
+        ))
+      ) : (
+        <div className="text-sm text-muted-foreground">{emptyText}</div>
+      )}
     </div>
   );
 }
