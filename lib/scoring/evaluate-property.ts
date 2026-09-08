@@ -523,6 +523,27 @@ function evaluateLocation(
   });
 }
 
+function evaluateAvailability(
+  property: PropertyRecord,
+  hardRejectReasons: RuleResult[]
+) {
+  if (!["sold", "off_market"].includes(property.listingStatus)) {
+    return;
+  }
+
+  hardRejectReasons.push({
+    ruleKey: "listing.availability",
+    label: "Listing unavailable",
+    category: "risk",
+    result: "hard_reject",
+    points: 0,
+    detail:
+      property.listingStatus === "sold"
+        ? "Listing status is sold."
+        : "Listing status is off market."
+  });
+}
+
 function evaluateBudget(
   property: PropertyRecord,
   profile: SearchProfile,
@@ -760,7 +781,7 @@ function evaluateResaleSupport(
 
   const spread = estimatedResaleValue - projectedTotal;
   const spreadPercent = spread / estimatedResaleValue;
-  const pointsBudget = round(categoryWeight * 0.25);
+  const pointsBudget = round(categoryWeight * 0.45);
   const detail = `${formatCurrencyValue(spread)} spread on ${formatCurrencyValue(
     estimatedResaleValue
   )} estimated resale value (${Math.round(spreadPercent * 1000) / 10}%).`;
@@ -1033,6 +1054,7 @@ export function evaluateProperty(
     categoryKeys.map((category) => [category, 0])
   ) as Record<ProfileCategory, number>;
 
+  evaluateAvailability(property, hardRejectReasons);
   evaluateLocation(
     property,
     profile,

@@ -672,7 +672,7 @@ describe("property scoring", () => {
         expect.objectContaining({
           ruleKey: "resale.estimated_spread",
           result: "bonus",
-          points: 4
+          points: 7.2
         })
       ])
     );
@@ -719,7 +719,61 @@ describe("property scoring", () => {
         expect.objectContaining({
           ruleKey: "resale.estimated_spread",
           result: "penalty",
-          points: -4
+          points: -7.2
+        })
+      ])
+    );
+  });
+
+  it("hard rejects sold real-example listings even when property fundamentals are strong", () => {
+    const property = createPropertyRecord({
+      id: "property-sold-strong-fundamentals",
+      addressLine1: "123 Stafford St",
+      city: "Stafford",
+      state: "CT",
+      postalCode: "06076",
+      listingStatus: "sold",
+      askingPrice: 260000,
+      livingSqft: 1600,
+      bedrooms: 3,
+      bathrooms: 2,
+      houseStyle: "Cape",
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-setting",
+          factKey: "setting.woods_privacy",
+          label: "Woods / Privacy",
+          value: true
+        }),
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 0
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-09-08T08:25:00.000Z",
+      () => "score-sold-strong-fundamentals"
+    );
+
+    expect(evaluation.hardRejected).toBe(true);
+    expect(evaluation.scoreLabel).toBe("Rejected by Scoring Setup");
+    expect(evaluation.hardRejectReasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "listing.availability",
+          detail: "Listing status is sold."
         })
       ])
     );
