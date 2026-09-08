@@ -217,6 +217,30 @@ function getExpectedRenovationCost(facts: FactIndex) {
   return hasRenovationFact(facts) ? null : 0;
 }
 
+function getProjectedInvestmentTotal(property: PropertyRecord, facts: FactIndex) {
+  const expectedRenovationCost = getExpectedRenovationCost(facts);
+  const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
+  const contingencyAmount = asNumber(facts.get("renovation.contingency_amount"));
+  const closingCosts = asNumber(facts.get("finance.closing_costs"));
+  const storedProjectedTotal = asNumber(
+    facts.get("finance.projected_total_investment")
+  );
+
+  return (
+    storedProjectedTotal ??
+    (basePrice !== null && expectedRenovationCost !== null
+      ? basePrice +
+        expectedRenovationCost +
+        (contingencyAmount ?? 0) +
+        (closingCosts ?? 0)
+      : null)
+  );
+}
+
+function formatCurrencyValue(value: number) {
+  return `$${Math.round(value).toLocaleString("en-US")}`;
+}
+
 function createFactIndex(property: PropertyRecord, profile: SearchProfile): FactIndex {
   const facts = new Map<string, FactValue>();
 
@@ -515,19 +539,10 @@ function evaluateBudget(
 
   const expectedRenovationCost = getExpectedRenovationCost(facts);
   const basePrice = property.estimatedPurchasePrice ?? property.askingPrice;
-  const contingencyAmount = asNumber(facts.get("renovation.contingency_amount"));
-  const closingCosts = asNumber(facts.get("finance.closing_costs"));
   const storedProjectedTotal = asNumber(
     facts.get("finance.projected_total_investment")
   );
-  const projectedTotal =
-    storedProjectedTotal ??
-    (basePrice !== null && expectedRenovationCost !== null
-      ? basePrice +
-        expectedRenovationCost +
-        (contingencyAmount ?? 0) +
-        (closingCosts ?? 0)
-      : null);
+  const projectedTotal = getProjectedInvestmentTotal(property, facts);
 
   if (projectedTotal === null) {
     if (basePrice === null) {
@@ -713,6 +728,73 @@ function evaluateRenovationCondition(
       category: "renovation",
       result: "penalty",
       points: round(points - categoryWeight),
+      detail
+    });
+  }
+}
+
+function evaluateResaleSupport(
+  property: PropertyRecord,
+  profile: SearchProfile,
+  facts: FactIndex,
+  categoryScores: Record<ProfileCategory, number>,
+  positiveFactors: RuleResult[],
+  penalties: RuleResult[]
+) {
+  const categoryWeight = getCategoryWeight(profile, "resale");
+  if (categoryWeight <= 0) {
+    return;
+  }
+
+  const estimatedResaleValue = asNumber(facts.get("resale.estimated_value"));
+
+  if (estimatedResaleValue === null || estimatedResaleValue <= 0) {
+    return;
+  }
+
+  const projectedTotal = getProjectedInvestmentTotal(property, facts);
+
+  if (projectedTotal === null) {
+    return;
+  }
+
+  const spread = estimatedResaleValue - projectedTotal;
+  const spreadPercent = spread / estimatedResaleValue;
+  const pointsBudget = round(categoryWeight * 0.25);
+  const detail = `${formatCurrencyValue(spread)} spread on ${formatCurrencyValue(
+    estimatedResaleValue
+  )} estimated resale value (${Math.round(spreadPercent * 1000) / 10}%).`;
+
+  if (spreadPercent >= 0.15) {
+    addCategoryScore(categoryScores, "resale", pointsBudget, categoryWeight);
+    positiveFactors.push({
+      ruleKey: "resale.estimated_spread",
+      label: "Estimated resale spread",
+      category: "resale",
+      result: "bonus",
+      points: pointsBudget,
+      detail
+    });
+  } else if (spreadPercent >= 0.08) {
+    const points = round(pointsBudget * 0.5);
+    addCategoryScore(categoryScores, "resale", points, categoryWeight);
+    positiveFactors.push({
+      ruleKey: "resale.estimated_spread",
+      label: "Estimated resale spread",
+      category: "resale",
+      result: "bonus",
+      points,
+      detail
+    });
+  } else if (spreadPercent < 0.03) {
+    const points = round(-pointsBudget);
+    addCategoryScore(categoryScores, "resale", points, categoryWeight);
+    penalties.push({
+      ruleKey: "resale.estimated_spread",
+      label: "Estimated resale spread",
+      category: "resale",
+      result: "penalty",
+      points,
       detail
     });
   }
@@ -978,6 +1060,14 @@ export function evaluateProperty(
     positiveFactors,
     penalties,
     missingData
+  );
+  evaluateResaleSupport(
+    property,
+    profile,
+    facts,
+    categoryScores,
+    positiveFactors,
+    penalties
   );
   evaluateFeaturePreferences(
     profile,

@@ -471,6 +471,260 @@ describe("property scoring", () => {
     );
   });
 
+  it("calibrates 66 Willington-style waterfront turnkey value as exceptional", () => {
+    const property = createPropertyRecord({
+      id: "property-66-willington-calibration",
+      addressLine1: "66 Willington Avenue",
+      city: "Stafford",
+      state: "CT",
+      postalCode: "06076",
+      askingPrice: 399900,
+      livingSqft: 1576,
+      bedrooms: 4,
+      bathrooms: 2,
+      houseStyle: "Colonial",
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-water-setting",
+          factKey: "setting.lake_view",
+          label: "Lake View",
+          value: true
+        }),
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 0
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-09-08T08:20:00.000Z",
+      () => "score-66-willington-calibration"
+    );
+
+    expect(evaluation.normalizedScore).toBeGreaterThanOrEqual(90);
+    expect(evaluation.scoreLabel).toBe("Exceptional");
+    expect(evaluation.categoryScores.financial).toBeGreaterThanOrEqual(20);
+    expect(evaluation.categoryScores.setting).toBeGreaterThanOrEqual(26);
+    expect(evaluation.missingData).toEqual([]);
+  });
+
+  it("keeps a strong waterfront turnkey value property high when style is missing", () => {
+    const property = createPropertyRecord({
+      id: "property-waterfront-turnkey-missing-style",
+      addressLine1: "66 Willington Avenue",
+      city: "Stafford",
+      state: "CT",
+      postalCode: "06076",
+      askingPrice: 399900,
+      livingSqft: 1576,
+      bedrooms: 4,
+      bathrooms: 2,
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-water-setting",
+          factKey: "setting.lake_view",
+          label: "Lake View",
+          value: true
+        }),
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 0
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-09-08T08:21:00.000Z",
+      () => "score-waterfront-turnkey-missing-style"
+    );
+
+    expect(evaluation.normalizedScore).toBeGreaterThanOrEqual(88);
+    expect(evaluation.missingData).toEqual(["House style is missing."]);
+    expect(evaluation.badges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Water Setting" }),
+        expect.objectContaining({ label: "Value Candidate" }),
+        expect.objectContaining({ label: "Turnkey Candidate" })
+      ])
+    );
+  });
+
+  it("badges cosmetic renovation candidates without treating renovation as a bonus", () => {
+    const property = createPropertyRecord({
+      id: "property-reno-candidate-calibration",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 245000,
+      livingSqft: 1400,
+      bedrooms: 3,
+      bathrooms: 2,
+      facts: [
+        createPropertyFact({
+          id: "fact-drive",
+          factKey: "location.drive_time_minutes",
+          label: "Drive time",
+          value: 24
+        }),
+        createPropertyFact({
+          id: "fact-setting",
+          factKey: "setting.woods_privacy",
+          label: "Woods / Privacy",
+          value: true
+        }),
+        createPropertyFact({
+          id: "fact-kitchen",
+          factKey: "renovation.kitchen",
+          label: "Kitchen",
+          value: true
+        }),
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 45000
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-09-08T08:22:00.000Z",
+      () => "score-reno-candidate-calibration"
+    );
+
+    expect(evaluation.badges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Reno Candidate" }),
+        expect.objectContaining({ label: "Value Candidate" })
+      ])
+    );
+    expect(evaluation.penalties).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "renovation.condition_fit",
+          result: "penalty"
+        })
+      ])
+    );
+  });
+
+  it("scores user-entered resale value against projected investment spread", () => {
+    const property = createPropertyRecord({
+      id: "property-resale-spread",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 300000,
+      livingSqft: 1500,
+      facts: [
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 50000
+        }),
+        createPropertyFact({
+          id: "fact-closing",
+          factKey: "finance.closing_costs",
+          label: "Closing and acquisition costs",
+          value: 10000
+        }),
+        createPropertyFact({
+          id: "fact-resale",
+          factKey: "resale.estimated_value",
+          label: "Estimated resale value",
+          value: 450000
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-09-08T08:23:00.000Z",
+      () => "score-resale-spread"
+    );
+
+    expect(evaluation.categoryScores.resale).toBeGreaterThan(0);
+    expect(evaluation.positiveFactors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "resale.estimated_spread",
+          result: "bonus",
+          points: 4
+        })
+      ])
+    );
+  });
+
+  it("penalizes thin resale spread against projected investment", () => {
+    const property = createPropertyRecord({
+      id: "property-thin-resale-spread",
+      city: "Stafford",
+      state: "CT",
+      askingPrice: 300000,
+      livingSqft: 1500,
+      facts: [
+        createPropertyFact({
+          id: "fact-renovation-cost",
+          factKey: "renovation.expected_cost",
+          label: "Expected renovation cost",
+          value: 50000
+        }),
+        createPropertyFact({
+          id: "fact-closing",
+          factKey: "finance.closing_costs",
+          label: "Closing and acquisition costs",
+          value: 10000
+        }),
+        createPropertyFact({
+          id: "fact-resale",
+          factKey: "resale.estimated_value",
+          label: "Estimated resale value",
+          value: 365000
+        })
+      ]
+    });
+
+    const evaluation = evaluateProperty(
+      property,
+      quietCornerSeedProfile,
+      "2026-09-08T08:24:00.000Z",
+      () => "score-thin-resale-spread"
+    );
+
+    expect(evaluation.penalties).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleKey: "resale.estimated_spread",
+          result: "penalty",
+          points: -4
+        })
+      ])
+    );
+  });
+
   it("does not warn when setting text was checked and no preferred setting matched", () => {
     const property = createPropertyRecord({
       id: "property-no-preferred-setting",

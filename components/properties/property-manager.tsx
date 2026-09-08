@@ -8,6 +8,7 @@ import {
   BadgeDollarSign,
   BarChart3,
   Camera,
+  ClipboardCheck,
   Clipboard,
   FileText,
   Home,
@@ -20,6 +21,7 @@ import {
   Save,
   Search,
   Sparkles,
+  TrendingUp,
   Trash2,
   Wrench
 } from "lucide-react";
@@ -100,8 +102,10 @@ import { cn } from "@/lib/utils";
 type TabId =
   | "overview"
   | "sources"
+  | "review"
   | "facts"
   | "financials"
+  | "resale"
   | "systems"
   | "notes"
   | "diagnostics"
@@ -114,8 +118,10 @@ const tabs: Array<{
 }> = [
   { id: "overview", label: "Overview", icon: Home },
   { id: "sources", label: "Sources", icon: Images },
+  { id: "review", label: "Review", icon: ClipboardCheck },
   { id: "facts", label: "Facts", icon: Search },
   { id: "financials", label: "Financials", icon: BadgeDollarSign },
+  { id: "resale", label: "Resale", icon: TrendingUp },
   { id: "systems", label: "Systems", icon: Wrench },
   { id: "notes", label: "Notes", icon: FileText },
   { id: "diagnostics", label: "Diagnostics", icon: Activity },
@@ -123,6 +129,49 @@ const tabs: Array<{
 ];
 
 const noPreferredSettingMatchFactKey = "setting.no_preferred_match";
+
+const reviewChecklistItems = [
+  {
+    factKey: "review.source_photos_reviewed",
+    label: "Source photos reviewed",
+    detail: "Captured listing photos have been checked for the right property."
+  },
+  {
+    factKey: "review.score_reviewed",
+    label: "Score reviewed",
+    detail: "Score summary, gaps, positives, and penalties have been reviewed."
+  },
+  {
+    factKey: "review.commute_checked",
+    label: "Commute checked",
+    detail: "Drive time has been calculated or manually verified."
+  },
+  {
+    factKey: "review.renovation_scope_reviewed",
+    label: "Renovation scope reviewed",
+    detail: "Inferred renovation scope and cost have been accepted or edited."
+  },
+  {
+    factKey: "review.tax_assessor_checked",
+    label: "Tax or assessor checked",
+    detail: "Public record basics have been reviewed."
+  },
+  {
+    factKey: "review.comps_checked",
+    label: "Comps checked",
+    detail: "Comparable sales or resale assumptions have been reviewed."
+  },
+  {
+    factKey: "review.notes_added",
+    label: "Notes added",
+    detail: "Decision notes or follow-up questions have been recorded."
+  },
+  {
+    factKey: "review.decision_recorded",
+    label: "Decision recorded",
+    detail: "Lifecycle status reflects the current decision."
+  }
+] as const;
 
 type EnrichmentStreamEvent =
   | {
@@ -2502,7 +2551,13 @@ export function PropertyManager() {
 
     replaceDraft({
       ...draft,
-      facts: [...draft.facts, createPropertyFact()]
+      facts: [
+        ...draft.facts,
+        createPropertyFact({
+          confidence: 1,
+          verified: true
+        })
+      ]
     });
   }
 
@@ -2921,6 +2976,9 @@ export function PropertyManager() {
                     onReplaceCapture={handleReplaceAttachedCapturedPhotos}
                   />
                 ) : null}
+                {activeTab === "review" ? (
+                  <ReviewTab draft={draft} updateDraft={updateDraft} />
+                ) : null}
                 {activeTab === "facts" ? (
                   <FactsTab
                     draft={draft}
@@ -2931,6 +2989,9 @@ export function PropertyManager() {
                 ) : null}
                 {activeTab === "financials" ? (
                   <FinancialsTab draft={draft} updateDraft={updateDraft} />
+                ) : null}
+                {activeTab === "resale" ? (
+                  <ResaleTab draft={draft} updateDraft={updateDraft} />
                 ) : null}
                 {activeTab === "systems" ? (
                   <SystemsTab draft={draft} updateDraft={updateDraft} />
@@ -3628,14 +3689,35 @@ function FactsTab({
   removeFact: (factId: string) => void;
   updateFact: (id: string, patch: Partial<PropertyFact>) => void;
 }) {
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
+
+  function updateTrustedFact(id: string, patch: Partial<PropertyFact>) {
+    updateFact(id, {
+      ...patch,
+      sourceType: "user_entered",
+      confidence: 1,
+      verified: true,
+      observedAt: new Date().toISOString()
+    });
+  }
+
   return (
     <Section
       title="Flexible Facts"
       action={
-        <Button type="button" variant="outline" size="sm" onClick={addFact}>
-          <Plus aria-hidden="true" />
-          Add Fact
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex h-9 items-center gap-2 rounded-md border border-border bg-card px-3 text-sm">
+            <Switch
+              checked={showAdvanced}
+              onCheckedChange={setShowAdvanced}
+            />
+            Advanced
+          </label>
+          <Button type="button" variant="outline" size="sm" onClick={addFact}>
+            <Plus aria-hidden="true" />
+            Add Fact
+          </Button>
+        </div>
       }
     >
       {draft.facts.length === 0 ? (
@@ -3648,13 +3730,13 @@ function FactsTab({
           {draft.facts.map((fact) => (
             <div
               key={fact.id}
-              className="grid gap-3 rounded-md border border-border bg-card p-3 xl:grid-cols-[minmax(140px,1fr)_minmax(160px,1fr)_120px_150px_110px_80px_44px]"
+              className="grid gap-3 rounded-md border border-border bg-card p-3 xl:grid-cols-[minmax(140px,1fr)_minmax(160px,1fr)_120px_44px]"
             >
               <Field label="Label">
                 <Input
                   value={fact.label}
                   onChange={(event) =>
-                    updateFact(fact.id, { label: event.target.value })
+                    updateTrustedFact(fact.id, { label: event.target.value })
                   }
                 />
               </Field>
@@ -3662,7 +3744,7 @@ function FactsTab({
                 <Input
                   value={fact.factKey}
                   onChange={(event) =>
-                    updateFact(fact.id, { factKey: event.target.value })
+                    updateTrustedFact(fact.id, { factKey: event.target.value })
                   }
                 />
               </Field>
@@ -3670,51 +3752,11 @@ function FactsTab({
                 <Input
                   value={formatFactValue(fact.value)}
                   onChange={(event) =>
-                    updateFact(fact.id, {
+                    updateTrustedFact(fact.id, {
                       value: parseFactValue(event.target.value)
                     })
                   }
                 />
-              </Field>
-              <Field label="Source">
-                <Select
-                  value={fact.sourceType}
-                  onChange={(event) =>
-                    updateFact(fact.id, {
-                      sourceType: event.target.value as PropertyFactSourceType
-                    })
-                  }
-                >
-                  {propertyFactSourceOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Confidence">
-                <Input
-                  type="number"
-                  min={0}
-                  max={1}
-                  step="0.05"
-                  value={fact.confidence ?? ""}
-                  onChange={(event) =>
-                    updateFact(fact.id, {
-                      confidence: parseNullableFloat(event.target.value)
-                    })
-                  }
-                />
-              </Field>
-              <Field label="Verified">
-                <div className="flex h-10 items-center">
-                  <Switch
-                    checked={fact.verified}
-                    onCheckedChange={(verified) =>
-                      updateFact(fact.id, { verified })
-                    }
-                  />
-                </div>
               </Field>
               <div className="flex items-end">
                 <Button
@@ -3727,21 +3769,225 @@ function FactsTab({
                   <Trash2 aria-hidden="true" />
                 </Button>
               </div>
-              <Field label="Source Reference" className="xl:col-span-7">
-                <Input
-                  value={fact.sourceReference}
-                  onChange={(event) =>
-                    updateFact(fact.id, {
-                      sourceReference: event.target.value
-                    })
-                  }
-                />
-              </Field>
+              {showAdvanced ? (
+                <div className="grid gap-3 border-t border-border pt-3 xl:col-span-4 xl:grid-cols-[150px_110px_80px_minmax(180px,1fr)]">
+                  <Field label="Source">
+                    <Select
+                      value={fact.sourceType}
+                      onChange={(event) =>
+                        updateFact(fact.id, {
+                          sourceType: event.target
+                            .value as PropertyFactSourceType
+                        })
+                      }
+                    >
+                      {propertyFactSourceOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Confidence">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={1}
+                      step="0.05"
+                      value={fact.confidence ?? ""}
+                      onChange={(event) =>
+                        updateFact(fact.id, {
+                          confidence: parseNullableFloat(event.target.value)
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="Verified">
+                    <div className="flex h-10 items-center">
+                      <Switch
+                        checked={fact.verified}
+                        onCheckedChange={(verified) =>
+                          updateFact(fact.id, { verified })
+                        }
+                      />
+                    </div>
+                  </Field>
+                  <Field label="Source Reference">
+                    <Input
+                      value={fact.sourceReference}
+                      onChange={(event) =>
+                        updateFact(fact.id, {
+                          sourceReference: event.target.value
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
       )}
     </Section>
+  );
+}
+
+function getBooleanFactValue(property: PropertyRecord, factKey: string) {
+  return property.facts.some(
+    (fact) => fact.factKey === factKey && fact.value === true
+  );
+}
+
+function upsertBooleanFact(
+  facts: PropertyFact[],
+  factKey: string,
+  label: string,
+  value: boolean,
+  sourceReference: string
+) {
+  const observedAt = new Date().toISOString();
+  const existingFact = facts.find((fact) => fact.factKey === factKey);
+
+  if (existingFact) {
+    return facts.map((fact) =>
+      fact.id === existingFact.id
+        ? {
+            ...fact,
+            label,
+            value,
+            sourceType: "user_entered" as const,
+            sourceReference,
+            confidence: null,
+            verified: value,
+            observedAt
+          }
+        : fact
+    );
+  }
+
+  return [
+    ...facts,
+    createPropertyFact({
+      factKey,
+      label,
+      value,
+      sourceType: "user_entered",
+      sourceReference,
+      verified: value
+    })
+  ];
+}
+
+function ReviewTab({
+  draft,
+  updateDraft
+}: {
+  draft: PropertyRecord;
+  updateDraft: (patch: Partial<PropertyRecord>) => void;
+}) {
+  const completedCount = reviewChecklistItems.filter((item) =>
+    getBooleanFactValue(draft, item.factKey)
+  ).length;
+
+  function updateReviewItem(
+    item: (typeof reviewChecklistItems)[number],
+    value: boolean
+  ) {
+    updateDraft({
+      facts: upsertBooleanFact(
+        draft.facts,
+        item.factKey,
+        item.label,
+        value,
+        "Review checklist"
+      )
+    });
+  }
+
+  return (
+    <div className="grid gap-5">
+      <Section
+        title="Review Checklist"
+        action={
+          <Badge
+            variant={
+              completedCount === reviewChecklistItems.length
+                ? "success"
+                : "outline"
+            }
+          >
+            {completedCount} / {reviewChecklistItems.length}
+          </Badge>
+        }
+      >
+        <div className="grid gap-2">
+          {reviewChecklistItems.map((item) => {
+            const checked = getBooleanFactValue(draft, item.factKey);
+
+            return (
+              <label
+                key={item.factKey}
+                className="flex min-w-0 items-start gap-3 rounded-md border border-border bg-card p-3"
+              >
+                <Switch
+                  checked={checked}
+                  onCheckedChange={(value) => updateReviewItem(item, value)}
+                />
+                <span className="grid gap-1">
+                  <span className="text-sm font-medium">{item.label}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {item.detail}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </Section>
+
+      <Section title="Decision">
+        <div className="grid gap-4 md:grid-cols-2">
+          <Field label="Lifecycle Status">
+            <Select
+              value={draft.lifecycleStatus}
+              onChange={(event) =>
+                updateDraft({
+                  lifecycleStatus: event.target.value as LifecycleStatus
+                })
+              }
+            >
+              {lifecycleStatusOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Listing Status">
+            <Select
+              value={draft.listingStatus}
+              onChange={(event) =>
+                updateDraft({
+                  listingStatus: event.target.value as ListingStatus
+                })
+              }
+            >
+              {listingStatusOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Private Notes" className="md:col-span-2">
+            <Textarea
+              value={draft.notes}
+              onChange={(event) => updateDraft({ notes: event.target.value })}
+            />
+          </Field>
+        </div>
+      </Section>
+    </div>
   );
 }
 
@@ -3766,6 +4012,12 @@ function getNumericFactValue(property: PropertyRecord, factKey: string) {
   return typeof fact?.value === "number" && Number.isFinite(fact.value)
     ? fact.value
     : null;
+}
+
+function getStringFactValue(property: PropertyRecord, factKey: string) {
+  const fact = property.facts.find((item) => item.factKey === factKey);
+
+  return typeof fact?.value === "string" ? fact.value : "";
 }
 
 function upsertNumberFact(
@@ -3807,6 +4059,50 @@ function upsertNumberFact(
       label,
       value,
       sourceType,
+      sourceReference
+    })
+  ];
+}
+
+function upsertStringFact(
+  facts: PropertyFact[],
+  factKey: string,
+  label: string,
+  value: string,
+  sourceReference: string
+) {
+  const trimmedValue = value.trim();
+
+  if (!trimmedValue) {
+    return facts.filter((fact) => fact.factKey !== factKey);
+  }
+
+  const existingFact = facts.find((fact) => fact.factKey === factKey);
+  const observedAt = new Date().toISOString();
+
+  if (existingFact) {
+    return facts.map((fact) =>
+      fact.id === existingFact.id
+        ? {
+            ...fact,
+            label,
+            value,
+            sourceType: "user_entered" as const,
+            sourceReference,
+            confidence: null,
+            observedAt
+          }
+        : fact
+    );
+  }
+
+  return [
+    ...facts,
+    createPropertyFact({
+      factKey,
+      label,
+      value,
+      sourceType: "user_entered",
       sourceReference
     })
   ];
@@ -3877,6 +4173,129 @@ function refreshInvestmentFacts(property: PropertyRecord): PropertyRecord {
     ...property,
     facts
   };
+}
+
+function ResaleTab({
+  draft,
+  updateDraft
+}: {
+  draft: PropertyRecord;
+  updateDraft: (patch: Partial<PropertyRecord>) => void;
+}) {
+  const estimatedResaleValue = getNumericFactValue(
+    draft,
+    "resale.estimated_value"
+  );
+  const compCount = getNumericFactValue(draft, "resale.comp_count");
+  const resaleConfidence = getStringFactValue(draft, "resale.confidence");
+  const compNotes = getStringFactValue(draft, "resale.comp_notes");
+  const projectedTotal = getProjectedTotalInvestment(draft);
+  const impliedSpread =
+    estimatedResaleValue !== null && projectedTotal !== null
+      ? estimatedResaleValue - projectedTotal
+      : null;
+  const impliedSpreadPercent =
+    impliedSpread !== null && estimatedResaleValue
+      ? Math.round((impliedSpread / estimatedResaleValue) * 1000) / 10
+      : null;
+
+  function updateResaleNumber(
+    factKey: string,
+    label: string,
+    value: number | null
+  ) {
+    updateDraft({
+      facts: upsertNumberFact(
+        draft.facts,
+        factKey,
+        label,
+        value,
+        "user_entered",
+        "Resale support"
+      )
+    });
+  }
+
+  function updateResaleString(factKey: string, label: string, value: string) {
+    updateDraft({
+      facts: upsertStringFact(
+        draft.facts,
+        factKey,
+        label,
+        value,
+        "Resale support"
+      )
+    });
+  }
+
+  return (
+    <div className="grid gap-5">
+      <Section title="Resale Support">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <NumberField
+            label="Estimated Resale Value"
+            value={estimatedResaleValue}
+            onChange={(value) =>
+              updateResaleNumber(
+                "resale.estimated_value",
+                "Estimated resale value",
+                value
+              )
+            }
+          />
+          <NumberField
+            label="Comps Reviewed"
+            value={compCount}
+            onChange={(value) =>
+              updateResaleNumber("resale.comp_count", "Comps reviewed", value)
+            }
+          />
+          <Field label="Resale Confidence">
+            <Select
+              value={resaleConfidence || "unknown"}
+              onChange={(event) =>
+                updateResaleString(
+                  "resale.confidence",
+                  "Resale confidence",
+                  event.target.value === "unknown" ? "" : event.target.value
+                )
+              }
+            >
+              <option value="unknown">Unknown</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </Select>
+          </Field>
+          <InvestmentMetric label="Projected Total" value={projectedTotal} />
+          <InvestmentMetric label="Implied Spread" value={impliedSpread} />
+          <div className="rounded-md border border-border bg-card px-3 py-2">
+            <div className="text-xs font-medium uppercase text-muted-foreground">
+              Spread %
+            </div>
+            <div className="mt-1 text-lg font-semibold">
+              {impliedSpreadPercent === null
+                ? "Not set"
+                : `${impliedSpreadPercent}%`}
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="Comp Notes">
+        <Textarea
+          value={compNotes}
+          onChange={(event) =>
+            updateResaleString(
+              "resale.comp_notes",
+              "Comparable sale notes",
+              event.target.value
+            )
+          }
+        />
+      </Section>
+    </div>
+  );
 }
 
 function FinancialsTab({

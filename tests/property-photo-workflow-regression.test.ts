@@ -103,6 +103,68 @@ describe("property photo workflow regression guards", () => {
     expect(source).toContain("evaluateProperty(enrichedProperty, activeProfile)");
   });
 
+  it("exposes a review checklist backed by property facts", () => {
+    const source = readPropertyManagerSource();
+
+    expect(source).toContain('id: "review"');
+    expect(source).toContain("review.source_photos_reviewed");
+    expect(source).toContain("review.renovation_scope_reviewed");
+    expect(source).toContain("Review Checklist");
+    expect(source).toContain("upsertBooleanFact(");
+    expect(source).toContain("Lifecycle Status");
+  });
+
+  it("exposes resale support inputs backed by property facts", () => {
+    const source = readPropertyManagerSource();
+
+    expect(source).toContain('id: "resale"');
+    expect(source).toContain("resale.estimated_value");
+    expect(source).toContain("resale.comp_notes");
+    expect(source).toContain("Estimated Resale Value");
+    expect(source).toContain("Implied Spread");
+  });
+
+  it("keeps raw fact metadata behind an advanced toggle", () => {
+    const source = readPropertyManagerSource();
+    const start = source.indexOf("function FactsTab");
+    const end = source.indexOf("function getBooleanFactValue", start);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+
+    const block = source.slice(start, end);
+
+    expect(block).toContain("showAdvanced");
+    expect(block).toContain("Advanced");
+    expect(block).toContain('label="Source"');
+    expect(block).toContain('label="Confidence"');
+    expect(block).toContain('label="Verified"');
+    expect(block.indexOf('label="Source"')).toBeGreaterThan(
+      block.indexOf("showAdvanced ?")
+    );
+  });
+
+  it("treats default flexible fact edits as trusted user-entered facts", () => {
+    const source = readPropertyManagerSource();
+    const start = source.indexOf("function FactsTab");
+    const end = source.indexOf("function getBooleanFactValue", start);
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+
+    const block = source.slice(start, end);
+
+    expect(block).toContain("function updateTrustedFact");
+    expect(block).toContain('sourceType: "user_entered"');
+    expect(block).toContain("confidence: 1");
+    expect(block).toContain("verified: true");
+    expect(block).toContain("observedAt: new Date().toISOString()");
+    expect(block).toContain("updateTrustedFact(fact.id, { label:");
+    expect(block).toContain("updateTrustedFact(fact.id, { factKey:");
+    expect(block).toContain("updateTrustedFact(fact.id, {");
+    expect(block).toContain("value: parseFactValue(event.target.value)");
+  });
+
   it("uses the filtered copy only for the enrichment request", () => {
     const source = readPropertyManagerSource();
     const start = source.indexOf("async function handleEnrichProperty");
