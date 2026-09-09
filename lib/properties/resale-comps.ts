@@ -19,6 +19,15 @@ export type ResaleCompSummary = {
   suggestedResaleValue: number | null;
 };
 
+export type ParsedResaleCompRow = {
+  address: string;
+  salePrice: number | null;
+  sqft: number | null;
+  distanceMiles: number | null;
+  confidence: string;
+  notes: string;
+};
+
 const resaleCompFactPattern =
   /^resale\.comp\.([^.]+)\.(address|sale_price|sqft|distance_miles|confidence|notes)$/;
 
@@ -58,6 +67,42 @@ function getAverage(values: number[]) {
 
 function roundCurrency(value: number) {
   return Math.round(value);
+}
+
+function parseNullableNumber(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number(value.replace(/[$,\s]/g, ""));
+
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function splitDelimitedLine(line: string) {
+  const delimiter = line.includes("\t") ? "\t" : line.includes("|") ? "|" : ",";
+  const values: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (const character of line) {
+    if (character === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (character === delimiter && !inQuotes) {
+      values.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += character;
+  }
+
+  values.push(current.trim());
+
+  return values;
 }
 
 export function getResaleCompPricePerSqft(comp: ResaleCompItem) {
@@ -141,4 +186,40 @@ export function getResaleCompSummary(
       averagePricePerSqft === null ? null : Math.round(averagePricePerSqft),
     suggestedResaleValue
   };
+}
+
+export function parseResaleCompRows(text: string): ParsedResaleCompRow[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(splitDelimitedLine)
+    .filter((parts) => {
+      const first = parts[0]?.toLowerCase() ?? "";
+
+      return first !== "address" && first !== "comp address";
+    })
+    .map((parts) => {
+      const confidenceCandidate = parts[4]?.trim().toLowerCase() ?? "";
+      const hasConfidenceColumn = ["low", "medium", "high"].includes(
+        confidenceCandidate
+      );
+
+      return {
+        address: parts[0] ?? "",
+        salePrice: parseNullableNumber(parts[1]),
+        sqft: parseNullableNumber(parts[2]),
+        distanceMiles: parseNullableNumber(parts[3]),
+        confidence: hasConfidenceColumn ? confidenceCandidate : "",
+        notes: hasConfidenceColumn ? (parts[5] ?? "") : (parts[4] ?? "")
+      };
+    })
+    .filter(
+      (row) =>
+        row.address ||
+        row.salePrice !== null ||
+        row.sqft !== null ||
+        row.distanceMiles !== null ||
+        row.notes
+    );
 }

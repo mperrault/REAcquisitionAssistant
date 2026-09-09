@@ -70,6 +70,7 @@ import {
 import {
   getResaleCompPricePerSqft,
   getResaleCompSummary,
+  parseResaleCompRows,
   type ResaleCompItem
 } from "@/lib/properties/resale-comps";
 import {
@@ -4241,6 +4242,80 @@ function refreshResaleFacts(property: PropertyRecord): PropertyRecord {
   };
 }
 
+function createResaleCompFacts(
+  compId: string,
+  values: {
+    address?: string;
+    salePrice?: number | null;
+    sqft?: number | null;
+    distanceMiles?: number | null;
+    confidence?: string;
+    notes?: string;
+  } = {}
+) {
+  const base = {
+    sourceType: "user_entered" as const,
+    sourceReference: "Comparable sale",
+    confidence: 1,
+    verified: true
+  };
+  const facts = [
+    createPropertyFact({
+      ...base,
+      factKey: `resale.comp.${compId}.address`,
+      label: "Comp address",
+      value: values.address ?? ""
+    }),
+    createPropertyFact({
+      ...base,
+      factKey: `resale.comp.${compId}.sale_price`,
+      label: "Comp sale price",
+      value: values.salePrice ?? null
+    }),
+    createPropertyFact({
+      ...base,
+      factKey: `resale.comp.${compId}.sqft`,
+      label: "Comp sqft",
+      value: values.sqft ?? null
+    })
+  ];
+
+  if (values.distanceMiles !== undefined) {
+    facts.push(
+      createPropertyFact({
+        ...base,
+        factKey: `resale.comp.${compId}.distance_miles`,
+        label: "Comp distance",
+        value: values.distanceMiles
+      })
+    );
+  }
+
+  if (values.confidence) {
+    facts.push(
+      createPropertyFact({
+        ...base,
+        factKey: `resale.comp.${compId}.confidence`,
+        label: "Comp confidence",
+        value: values.confidence
+      })
+    );
+  }
+
+  if (values.notes) {
+    facts.push(
+      createPropertyFact({
+        ...base,
+        factKey: `resale.comp.${compId}.notes`,
+        label: "Comp notes",
+        value: values.notes
+      })
+    );
+  }
+
+  return facts;
+}
+
 function ResaleTab({
   draft,
   updateDraft
@@ -4248,6 +4323,7 @@ function ResaleTab({
   draft: PropertyRecord;
   updateDraft: (patch: Partial<PropertyRecord>) => void;
 }) {
+  const [compImportStatus, setCompImportStatus] = React.useState("");
   const resaleSummary = getResaleCompSummary(draft);
   const estimatedResaleValue = getNumericFactValue(
     draft,
@@ -4259,6 +4335,16 @@ function ResaleTab({
   const projectedTotal = getProjectedTotalInvestment(draft);
   const scoringResaleValue =
     estimatedResaleValue ?? resaleSummary.suggestedResaleValue;
+  const scoringValueSource = estimatedResaleValue !== null
+    ? "Manual Override"
+    : resaleSummary.suggestedResaleValue
+      ? "Suggested Resale"
+      : "Not Set";
+  const incompleteCompCount =
+    resaleSummary.comps.length - resaleSummary.usableComps.length;
+  const lowConfidenceCompCount = resaleSummary.comps.filter(
+    (comp) => comp.confidence === "low" || !comp.confidence
+  ).length;
   const impliedSpread =
     scoringResaleValue !== null && projectedTotal !== null
       ? scoringResaleValue - projectedTotal
@@ -4297,38 +4383,7 @@ function ResaleTab({
 
   function addComp() {
     const compId = Date.now().toString();
-    const facts = [
-      ...draft.facts,
-      createPropertyFact({
-        factKey: `resale.comp.${compId}.address`,
-        label: "Comp address",
-        value: "",
-        sourceType: "user_entered",
-        sourceReference: "Comparable sale",
-        confidence: 1,
-        verified: true
-      }),
-      createPropertyFact({
-        factKey: `resale.comp.${compId}.sale_price`,
-        label: "Comp sale price",
-        value: null,
-        sourceType: "user_entered",
-        sourceReference: "Comparable sale",
-        confidence: 1,
-        verified: true
-      }),
-      createPropertyFact({
-        factKey: `resale.comp.${compId}.sqft`,
-        label: "Comp sqft",
-        value: null,
-        sourceType: "user_entered",
-        sourceReference: "Comparable sale",
-        confidence: 1,
-        verified: true
-      })
-    ];
-
-    applyResaleFacts(facts);
+    applyResaleFacts([...draft.facts, ...createResaleCompFacts(compId)]);
   }
 
   function updateCompNumber(
@@ -4382,21 +4437,68 @@ function ResaleTab({
     );
   }
 
+  function clearResaleOverride() {
+    updateResaleNumber(
+      "resale.estimated_value",
+      resaleFactLabels.estimatedValue,
+      null
+    );
+  }
+
+  async function importCompsFromClipboard() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const rows = parseResaleCompRows(text);
+
+      if (rows.length === 0) {
+        setCompImportStatus("No comp rows found on clipboard.");
+        return;
+      }
+
+      const now = Date.now();
+      const importedFacts = rows.flatMap((row, index) =>
+        createResaleCompFacts(`${now}-${index}`, row)
+      );
+
+      applyResaleFacts([...draft.facts, ...importedFacts]);
+      setCompImportStatus(
+        `Imported ${rows.length} comp${rows.length === 1 ? "" : "s"}.`
+      );
+    } catch {
+      setCompImportStatus("Clipboard import failed.");
+    }
+  }
+
   return (
     <div className="grid gap-5">
-      <Section title="Resale Support">
+      <Section
+        title="Resale Support"
+        action={<Badge variant="outline">Using {scoringValueSource}</Badge>}
+      >
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <NumberField
-            label="Resale Value Override"
-            value={estimatedResaleValue}
-            onChange={(value) =>
-              updateResaleNumber(
-                "resale.estimated_value",
-                resaleFactLabels.estimatedValue,
-                value
-              )
-            }
-          />
+          <div className="grid gap-2">
+            <NumberField
+              label="Resale Value Override"
+              value={estimatedResaleValue}
+              onChange={(value) =>
+                updateResaleNumber(
+                  "resale.estimated_value",
+                  resaleFactLabels.estimatedValue,
+                  value
+                )
+              }
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={clearResaleOverride}
+              disabled={estimatedResaleValue === null}
+            >
+              <RotateCcw aria-hidden="true" />
+              Clear Override
+            </Button>
+          </div>
           <InvestmentMetric
             label="Suggested Resale"
             value={resaleSummary.suggestedResaleValue}
@@ -4461,6 +4563,15 @@ function ResaleTab({
               type="button"
               variant="outline"
               size="sm"
+              onClick={importCompsFromClipboard}
+            >
+              <Clipboard aria-hidden="true" />
+              Import Clipboard
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={useSuggestedResaleValue}
               disabled={resaleSummary.suggestedResaleValue === null}
             >
@@ -4475,6 +4586,24 @@ function ResaleTab({
         }
       >
         <div className="grid gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">
+              {resaleSummary.usableComps.length} usable
+            </Badge>
+            {incompleteCompCount > 0 ? (
+              <Badge variant="warning">{incompleteCompCount} incomplete</Badge>
+            ) : null}
+            {lowConfidenceCompCount > 0 ? (
+              <Badge variant="secondary">
+                {lowConfidenceCompCount} low-confidence
+              </Badge>
+            ) : null}
+            {compImportStatus ? (
+              <span className="text-xs text-muted-foreground">
+                {compImportStatus}
+              </span>
+            ) : null}
+          </div>
           {resaleSummary.comps.length === 0 ? (
             <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
               No comparable sales recorded.

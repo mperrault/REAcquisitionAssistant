@@ -6,7 +6,8 @@ import {
 } from "@/lib/properties/property-persistence";
 import {
   getResaleCompPricePerSqft,
-  getResaleCompSummary
+  getResaleCompSummary,
+  parseResaleCompRows
 } from "@/lib/properties/resale-comps";
 
 describe("resale comparable sales", () => {
@@ -83,5 +84,30 @@ describe("resale comparable sales", () => {
     expect(summary.comps).toHaveLength(2);
     expect(summary.usableComps).toHaveLength(0);
     expect(summary.suggestedResaleValue).toBeNull();
+  });
+
+  it("parses clipboard comp rows with optional header and notes", () => {
+    const rows = parseResaleCompRows(`address,sale price,sqft,distance,confidence,notes
+"10 Lake Rd, Stafford, CT","$420,000","1,400",0.8,high,water view
+12 Pond St | 390000 | 1300 | 1.1 | similar condition`);
+
+    expect(rows).toEqual([
+      {
+        address: "10 Lake Rd, Stafford, CT",
+        salePrice: 420000,
+        sqft: 1400,
+        distanceMiles: 0.8,
+        confidence: "high",
+        notes: "water view"
+      },
+      {
+        address: "12 Pond St",
+        salePrice: 390000,
+        sqft: 1300,
+        distanceMiles: 1.1,
+        confidence: "",
+        notes: "similar condition"
+      }
+    ]);
   });
 });
