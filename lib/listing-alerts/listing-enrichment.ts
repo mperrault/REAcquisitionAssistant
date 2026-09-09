@@ -51,7 +51,10 @@ const enrichmentDiagnosticSchema = z.object({
   stage: z.string().min(1),
   status: z.enum(["started", "success", "warning", "skipped", "failed", "info"]),
   message: z.string().min(1),
-  detail: z.string()
+  detail: z.string(),
+  imageUrl: z.string().default(""),
+  imageUrls: z.array(z.string()).default([]),
+  imageTotalCount: z.number().int().nonnegative().default(0)
 });
 
 export const listingCandidateEnrichmentRequestSchema = z.object({
@@ -357,7 +360,10 @@ function createDiagnosticRecorder(
       stage: string,
       status: EnrichmentDiagnosticStatus,
       message: string,
-      detail = ""
+      detail = "",
+      imageUrl = "",
+      imageUrls: string[] = [],
+      imageTotalCount = 0
     ) {
       const diagnostic = {
         id: `${diagnostics.length + 1}`,
@@ -365,7 +371,10 @@ function createDiagnosticRecorder(
         stage,
         status,
         message,
-        detail
+        detail,
+        imageUrl,
+        imageUrls,
+        imageTotalCount
       };
 
       diagnostics.push(diagnostic);
@@ -1531,6 +1540,9 @@ async function inferRenovationsFromPhotos(
       | "retrying"
       | "complete";
     detail: string;
+    imageUrl?: string;
+    imageUrls?: string[];
+    imageTotalCount?: number;
   }) => void
 ): Promise<{ renovation: RenovationInference | null; warning: string | null }> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -1633,7 +1645,9 @@ async function inferRenovationsFromPhotos(
       phase: "requesting",
       detail:
         `Sending ${batch.length} photo${batch.length === 1 ? "" : "s"} to AI for visible-condition analysis. ` +
-        "Checking for material wear, damage, dated finishes, functional issues, and near-term renovation needs."
+        "Checking for material wear, damage, dated finishes, functional issues, and near-term renovation needs.",
+      imageUrls: batch.slice(0, 4),
+      imageTotalCount: batch.length
     });
 
     const result = await requestRenovation(batch);
@@ -1669,6 +1683,8 @@ async function inferRenovationsFromPhotos(
           `The batch request appears to contain an image-specific problem. Retrying up to ${batch.length} photo${batch.length === 1 ? "" : "s"} individually so usable photos are not lost.`
       });
 
+      let retryFailures = 0;
+
       for (let retryIndex = 0; retryIndex < batch.length; retryIndex += 1) {
         throwIfAborted(signal);
 
@@ -1681,15 +1697,72 @@ async function inferRenovationsFromPhotos(
           status: "started",
           phase: "retrying",
           detail:
-            `Retrying photo ${retryIndex + 1} of ${batch.length} from batch ${batchNumber}.`
+            `Retrying photo ${retryIndex + 1} of ${batch.length} from batch ${batchNumber}.`,
+          imageUrl: batch[retryIndex],
+          imageTotalCount: 1
         });
 
         const singleImageResult = await requestRenovation([batch[retryIndex]]);
 
         if (singleImageResult.renovation) {
           singleImageResults.push(singleImageResult.renovation);
+          onProgress?.({
+            batchNumber,
+            totalBatches,
+            processedPhotos: processedBeforeBatch,
+            totalPhotos: imageUrls.length,
+            batchPhotoCount: batch.length,
+            status: "success",
+            phase: "retrying",
+            detail:
+              `Photo ${retryIndex + 1} of ${batch.length} analyzed successfully — near-term renovation findings were identified with sufficient confidence.`,
+            imageUrl: batch[retryIndex],
+            imageTotalCount: 1
+          });
+        } else if (singleImageResult.warning) {
+          retryFailures += 1;
+          onProgress?.({
+            batchNumber,
+            totalBatches,
+            processedPhotos: processedBeforeBatch,
+            totalPhotos: imageUrls.length,
+            batchPhotoCount: batch.length,
+            status: "warning",
+            phase: "retrying",
+            detail:
+              `Photo ${retryIndex + 1} of ${batch.length} could not be analyzed successfully — ${singleImageResult.warning}`,
+            imageUrl: batch[retryIndex],
+            imageTotalCount: 1
+          });
+        } else {
+          onProgress?.({
+            batchNumber,
+            totalBatches,
+            processedPhotos: processedBeforeBatch,
+            totalPhotos: imageUrls.length,
+            batchPhotoCount: batch.length,
+            status: "success",
+            phase: "retrying",
+            detail:
+              `Photo ${retryIndex + 1} of ${batch.length} analyzed successfully — based on the analysis, with sufficient confidence, no near-term renovation is needed.`,
+            imageUrl: batch[retryIndex],
+            imageTotalCount: 1
+          });
         }
       }
+
+      onProgress?.({
+        batchNumber,
+        totalBatches,
+        processedPhotos: processedBeforeBatch,
+        totalPhotos: imageUrls.length,
+        batchPhotoCount: batch.length,
+        status: singleImageResults.length > 0 ? "success" : "warning",
+        phase: "retrying",
+        detail:
+          `Recovery pass complete for batch ${batchNumber}: ${singleImageResults.length} of ${batch.length} photo${batch.length === 1 ? "" : "s"} produced confident near-term renovation findings` +
+          `${retryFailures > 0 ? `; ${retryFailures} retry${retryFailures === 1 ? "" : "ies"} failed` : ""}.`
+      });
 
       if (singleImageResults.length > 0) {
         return {
@@ -1721,7 +1794,9 @@ async function inferRenovationsFromPhotos(
       phase: "preparing",
       detail:
         `Preparing batch ${batchNumber} of ${totalBatches}: ${batch.length} photo${batch.length === 1 ? "" : "s"}. ` +
-        `${index}/${imageUrls.length} photos processed so far (${Math.round((index / imageUrls.length) * 100)}%).`
+        `${index}/${imageUrls.length} photos processed so far (${Math.round((index / imageUrls.length) * 100)}%).`,
+      imageUrls: batch.slice(0, 4),
+      imageTotalCount: batch.length
     });
 
     const result = await analyzeBatch(
@@ -2271,7 +2346,10 @@ export async function enrichListingCandidate(
                         : progress.status === "success"
                           ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
                           : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
-                progress.detail
+                progress.detail,
+                progress.imageUrl ?? "",
+                progress.imageUrls ?? [],
+                progress.imageTotalCount ?? 0
               )
           )
         : null;
@@ -2397,7 +2475,9 @@ export async function enrichListingCandidate(
                         : progress.status === "success"
                           ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
                           : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
-                progress.detail
+                progress.detail,
+                progress.imageUrl ?? "",
+                progress.imageUrls ?? []
               )
           )
         : null;

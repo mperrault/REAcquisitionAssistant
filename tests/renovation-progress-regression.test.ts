@@ -30,4 +30,33 @@ describe("renovation progress diagnostics", () => {
     expect(text).toContain("Validating renovation findings");
     expect(text).toContain("Recovering usable photos from renovation batch");
   });
+  it("reports the outcome of each individual-photo retry", () => {
+    const text = source();
+
+    expect(text).toContain("analyzed successfully — near-term renovation findings were identified with sufficient confidence");
+    expect(text).toContain("could not be analyzed successfully — ${singleImageResult.warning}");
+    expect(text).toContain("analyzed successfully — based on the analysis, with sufficient confidence, no near-term renovation is needed.");
+    expect(text).toContain("Recovery pass complete for batch");
+  });
+
+  it("carries photo URLs into progress diagnostics", () => {
+    const text = source();
+
+    expect(text).toContain("imageUrl?: string");
+    expect(text).toContain("imageUrls?: string[]");
+    expect(text).toContain("imageUrl: batch[retryIndex]");
+    expect(text).toContain("imageUrls: batch.slice(0, 4)");
+    expect(text).toContain('progress.imageUrl ?? ""');
+    expect(text).toContain("progress.imageUrls ?? []");
+  });
+
+
+  it("carries total photo count for partial batch thumbnail previews", () => {
+    const text = source();
+
+    expect(text).toContain("imageTotalCount?: number");
+    expect(text).toContain("imageTotalCount: batch.length");
+    expect(text).toContain("progress.imageTotalCount ?? 0");
+  });
+
 });

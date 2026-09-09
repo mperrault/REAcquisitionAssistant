@@ -366,7 +366,10 @@ function createPropertyDiagnostic(
     stage,
     status,
     message,
-    detail
+    detail,
+    imageUrl: "",
+    imageUrls: [],
+    imageTotalCount: 0
   };
 }
 
@@ -2680,6 +2683,64 @@ export function PropertyManager() {
                     <p className="mt-1 text-xs text-muted-foreground">
                       {diagnostic.detail}
                     </p>
+                  ) : null}
+                  {diagnostic.imageUrl ||
+                  (diagnostic.imageUrls ?? []).length > 0 ||
+                  (diagnostic.imageTotalCount ?? 0) > 0 ? (
+                    (() => {
+                      const previewUrls = Array.from(
+                        new Set([
+                          ...(diagnostic.imageUrl
+                            ? [diagnostic.imageUrl]
+                            : []),
+                          ...(diagnostic.imageUrls ?? [])
+                        ])
+                      ).slice(0, 4);
+                      const totalImages = Math.max(
+                        diagnostic.imageTotalCount ?? 0,
+                        previewUrls.length
+                      );
+                      const remainingImageCount = Math.max(
+                        0,
+                        totalImages - previewUrls.length
+                      );
+
+                      return (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {previewUrls.map((photoUrl) => (
+                            <div
+                              key={photoUrl}
+                              className="relative h-16 w-20 overflow-hidden rounded border border-border bg-secondary"
+                            >
+                              <Image
+                                src={photoUrl}
+                                alt="Photo currently being analyzed"
+                                fill
+                                sizes="80px"
+                                className="object-cover"
+                                loading="lazy"
+                                unoptimized
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          ))}
+                          {remainingImageCount > 0 ? (
+                            <div className="relative flex h-16 w-20 flex-col items-center justify-center overflow-hidden rounded border border-dashed border-border bg-secondary px-2 text-center">
+                              <div className="pointer-events-none absolute left-3 top-3 h-8 w-10 rounded border border-border/70 bg-background/70" />
+                              <div className="pointer-events-none absolute left-6 top-5 h-8 w-10 rounded border border-border/70 bg-background/85" />
+                              <div className="relative z-10 flex flex-col items-center leading-tight">
+                                <span className="text-sm font-semibold text-foreground">
+                                  +{remainingImageCount}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground">
+                                  more photos
+                                </span>
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })()
                   ) : null}
                 </div>
               ))}

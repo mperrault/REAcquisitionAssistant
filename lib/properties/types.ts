@@ -100,7 +100,10 @@ export const propertyEnrichmentDiagnosticSchema = z.object({
   stage: z.string().min(1),
   status: z.enum(["started", "success", "warning", "skipped", "failed", "info"]),
   message: z.string().min(1),
-  detail: z.string()
+  detail: z.string(),
+  imageUrl: z.string().default(""),
+  imageUrls: z.array(z.string()).default([]),
+  imageTotalCount: z.number().int().nonnegative().default(0)
 });
 
 export type PropertyEnrichmentDiagnostic = z.infer<

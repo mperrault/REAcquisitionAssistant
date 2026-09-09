@@ -195,4 +195,38 @@ describe("property photo workflow regression guards", () => {
     expect(block).toContain("enrichmentCandidateProperty");
     expect(block).toContain("mergeEnrichmentIntoProperty(propertyDraft, enrichment)");
   });
+  it("renders diagnostic photo thumbnails during enrichment", () => {
+    const source = readPropertyManagerSource();
+
+    expect(source).toContain("diagnostic.imageUrl");
+    expect(source).toContain("diagnostic.imageUrls");
+    expect(source).toContain('alt="Photo currently being analyzed"');
+  });
+
+  it("keeps diagnostic thumbnails compatible with legacy diagnostics", () => {
+    const source = readPropertyManagerSource();
+
+    expect(source).toContain("(diagnostic.imageUrls ?? []).length");
+    expect(source).toContain("...(diagnostic.imageUrls ?? [])");
+  });
+
+  it("creates client diagnostics with default image fields", () => {
+    const source = readPropertyManagerSource();
+    const start = source.indexOf("function createPropertyDiagnostic");
+    const end = source.indexOf("export function createBrowserCaptureBookmarklet", start);
+    const block = source.slice(start, end);
+
+    expect(block).toContain('imageUrl: ""');
+    expect(block).toContain("imageUrls: []");
+  });
+
+
+  it("renders a placeholder tile for batch photos not shown as thumbnails", () => {
+    const source = readPropertyManagerSource();
+
+    expect(source).toContain("imageTotalCount");
+    expect(source).toContain("remainingImageCount");
+    expect(source).toContain("more photos");
+  });
+
 });
