@@ -68,10 +68,13 @@ import {
   getRenovationExpectedCost
 } from "@/lib/properties/property-dashboard";
 import {
+  getResaleCandidateComps,
   getResaleCompIssues,
   getResaleCompPricePerSqft,
   getResaleCompSummary,
+  parseResaleCandidateCompRows,
   parseResaleCompRows,
+  type ResaleCandidateCompItem,
   type ResaleCompItem
 } from "@/lib/properties/resale-comps";
 import {
@@ -4243,16 +4246,22 @@ function refreshResaleFacts(property: PropertyRecord): PropertyRecord {
   };
 }
 
+type ResaleCompFactValues = {
+  address?: string;
+  salePrice?: number | null;
+  sqft?: number | null;
+  distanceMiles?: number | null;
+  confidence?: string;
+  notes?: string;
+};
+
+type ResaleCandidateCompFactValues = ResaleCompFactValues & {
+  sourceUrl?: string;
+};
+
 function createResaleCompFacts(
   compId: string,
-  values: {
-    address?: string;
-    salePrice?: number | null;
-    sqft?: number | null;
-    distanceMiles?: number | null;
-    confidence?: string;
-    notes?: string;
-  } = {}
+  values: ResaleCompFactValues = {}
 ) {
   const base = {
     sourceType: "user_entered" as const,
@@ -4317,6 +4326,104 @@ function createResaleCompFacts(
   return facts;
 }
 
+function createResaleCandidateCompFacts(
+  candidateId: string,
+  values: ResaleCandidateCompFactValues = {}
+) {
+  const base = {
+    sourceType: "user_entered" as const,
+    sourceReference: "Candidate comp",
+    confidence: 1,
+    verified: true
+  };
+  const facts = [
+    createPropertyFact({
+      ...base,
+      factKey: `resale.candidate_comp.${candidateId}.address`,
+      label: "Candidate address",
+      value: values.address ?? ""
+    }),
+    createPropertyFact({
+      ...base,
+      factKey: `resale.candidate_comp.${candidateId}.sale_price`,
+      label: "Candidate sale price",
+      value: values.salePrice ?? null
+    }),
+    createPropertyFact({
+      ...base,
+      factKey: `resale.candidate_comp.${candidateId}.sqft`,
+      label: "Candidate sqft",
+      value: values.sqft ?? null
+    })
+  ];
+
+  if (values.distanceMiles !== undefined) {
+    facts.push(
+      createPropertyFact({
+        ...base,
+        factKey: `resale.candidate_comp.${candidateId}.distance_miles`,
+        label: "Candidate distance",
+        value: values.distanceMiles
+      })
+    );
+  }
+
+  if (values.confidence) {
+    facts.push(
+      createPropertyFact({
+        ...base,
+        factKey: `resale.candidate_comp.${candidateId}.confidence`,
+        label: "Candidate confidence",
+        value: values.confidence
+      })
+    );
+  }
+
+  if (values.notes) {
+    facts.push(
+      createPropertyFact({
+        ...base,
+        factKey: `resale.candidate_comp.${candidateId}.notes`,
+        label: "Candidate notes",
+        value: values.notes
+      })
+    );
+  }
+
+  if (values.sourceUrl) {
+    facts.push(
+      createPropertyFact({
+        ...base,
+        factKey: `resale.candidate_comp.${candidateId}.source_url`,
+        label: "Candidate source URL",
+        value: values.sourceUrl
+      })
+    );
+  }
+
+  return facts;
+}
+
+function getZillowSoldSearchUrl(searchText: string) {
+  const query = searchText.trim() || "Stafford CT";
+  const path = encodeURIComponent(query).replace(/%20/g, "-");
+
+  return `https://www.zillow.com/homes/recently_sold/${path}_rb/`;
+}
+
+function getRealtorSoldSearchUrl(
+  property: PropertyRecord,
+  searchText: string
+) {
+  const cityState =
+    property.city && property.state
+      ? `${property.city.trim().replace(/\s+/g, "-")}_${property.state.trim()}`
+      : searchText.trim().replace(/\s+/g, "-");
+  const path = cityState || "Stafford_CT";
+
+  return `https://www.realtor.com/realestateandhomes-search/${encodeURIComponent(path)}/show-recently-sold`;
+}
+
 function ResaleTab({
   draft,
   updateDraft
@@ -4325,7 +4432,17 @@ function ResaleTab({
   updateDraft: (patch: Partial<PropertyRecord>) => void;
 }) {
   const [compImportStatus, setCompImportStatus] = React.useState("");
+  const defaultCompSearchQuery = [
+    draft.city,
+    draft.state,
+    draft.postalCode
+  ].filter(Boolean).join(" ");
+  const [compSearchQuery, setCompSearchQuery] = React.useState(
+    defaultCompSearchQuery
+  );
+  const [candidateImportStatus, setCandidateImportStatus] = React.useState("");
   const resaleSummary = getResaleCompSummary(draft);
+  const candidateComps = getResaleCandidateComps(draft);
   const estimatedResaleValue = getNumericFactValue(
     draft,
     "resale.estimated_value"
@@ -4347,10 +4464,18 @@ function ResaleTab({
   const lowConfidenceCompCount = resaleSummary.comps.filter(
     (comp) => comp.confidence === "low" || !comp.confidence
   ).length;
+  const candidateIssueCount = candidateComps.reduce(
+    (total, comp) => total + getResaleCompIssues(comp).length,
+    0
+  );
   const compIssueCount = resaleSummary.comps.reduce(
     (total, comp) => total + getResaleCompIssues(comp).length,
     0
   );
+  const compSearchText =
+    compSearchQuery.trim() || defaultCompSearchQuery || draft.addressLine1;
+  const zillowCompSearchUrl = getZillowSoldSearchUrl(compSearchText);
+  const realtorCompSearchUrl = getRealtorSoldSearchUrl(draft, compSearchText);
   const resaleDiagnostics = [
     estimatedResaleValue !== null
       ? "Score uses the manual resale override."
@@ -4372,6 +4497,10 @@ function ResaleTab({
     impliedSpread !== null && scoringResaleValue
       ? Math.round((impliedSpread / scoringResaleValue) * 1000) / 10
       : null;
+
+  React.useEffect(() => {
+    setCompSearchQuery(defaultCompSearchQuery);
+  }, [draft.id, defaultCompSearchQuery]);
 
   function applyResaleFacts(facts: PropertyFact[]) {
     updateDraft(refreshResaleFacts({ ...draft, facts }));
@@ -4403,6 +4532,14 @@ function ResaleTab({
   function addComp() {
     const compId = Date.now().toString();
     applyResaleFacts([...draft.facts, ...createResaleCompFacts(compId)]);
+  }
+
+  function addCandidateComp() {
+    const candidateId = Date.now().toString();
+    applyResaleFacts([
+      ...draft.facts,
+      ...createResaleCandidateCompFacts(candidateId)
+    ]);
   }
 
   function updateCompNumber(
@@ -4448,6 +4585,70 @@ function ResaleTab({
     );
   }
 
+  function updateCandidateCompNumber(
+    comp: ResaleCandidateCompItem,
+    field: "sale_price" | "sqft" | "distance_miles",
+    label: string,
+    value: number | null
+  ) {
+    applyResaleFacts(
+      upsertNumberFact(
+        draft.facts,
+        `resale.candidate_comp.${comp.id}.${field}`,
+        label,
+        value,
+        "user_entered",
+        "Candidate comp"
+      )
+    );
+  }
+
+  function updateCandidateCompString(
+    comp: ResaleCandidateCompItem,
+    field: "address" | "confidence" | "notes" | "source_url",
+    label: string,
+    value: string
+  ) {
+    applyResaleFacts(
+      upsertStringFact(
+        draft.facts,
+        `resale.candidate_comp.${comp.id}.${field}`,
+        label,
+        value,
+        "Candidate comp"
+      )
+    );
+  }
+
+  function removeCandidateComp(comp: ResaleCandidateCompItem) {
+    applyResaleFacts(
+      draft.facts.filter(
+        (fact) => !fact.factKey.startsWith(`resale.candidate_comp.${comp.id}.`)
+      )
+    );
+  }
+
+  function promoteCandidateComp(comp: ResaleCandidateCompItem) {
+    const sourceNote = comp.sourceUrl ? `Source: ${comp.sourceUrl}` : "";
+    const notes = [comp.notes, sourceNote].filter(Boolean).join("\n");
+    const candidateFactsRemoved = draft.facts.filter(
+      (fact) => !fact.factKey.startsWith(`resale.candidate_comp.${comp.id}.`)
+    );
+
+    applyResaleFacts([
+      ...candidateFactsRemoved,
+      ...createResaleCompFacts(`candidate-${comp.id}-${Date.now()}`, {
+        address: comp.address,
+        salePrice: comp.salePrice,
+        sqft: comp.sqft,
+        distanceMiles: comp.distanceMiles,
+        confidence: comp.confidence,
+        notes
+      })
+    ]);
+    setCandidateImportStatus("Candidate moved to Comparable Sales.");
+  }
+
   function useSuggestedResaleValue() {
     updateResaleNumber(
       "resale.estimated_value",
@@ -4485,6 +4686,30 @@ function ResaleTab({
       );
     } catch {
       setCompImportStatus("Clipboard import failed.");
+    }
+  }
+
+  async function importCandidateCompsFromClipboard() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const rows = parseResaleCandidateCompRows(text);
+
+      if (rows.length === 0) {
+        setCandidateImportStatus("No candidate rows found on clipboard.");
+        return;
+      }
+
+      const now = Date.now();
+      const importedFacts = rows.flatMap((row, index) =>
+        createResaleCandidateCompFacts(`${now}-${index}`, row)
+      );
+
+      applyResaleFacts([...draft.facts, ...importedFacts]);
+      setCandidateImportStatus(
+        `Imported ${rows.length} candidate${rows.length === 1 ? "" : "s"}.`
+      );
+    } catch {
+      setCandidateImportStatus("Clipboard import failed.");
     }
   }
 
@@ -4589,6 +4814,98 @@ function ResaleTab({
         </div>
       </Section>
 
+      <Section title="Comp Search">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+          <Field label="Search Area">
+            <Input
+              value={compSearchQuery}
+              onChange={(event) => setCompSearchQuery(event.target.value)}
+            />
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" size="sm" asChild>
+              <a
+                href={zillowCompSearchUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Search aria-hidden="true" />
+                Zillow Sold
+              </a>
+            </Button>
+            <Button type="button" variant="outline" size="sm" asChild>
+              <a
+                href={realtorCompSearchUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <Search aria-hidden="true" />
+                Realtor Sold
+              </a>
+            </Button>
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="Candidate Comps"
+        action={
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={importCandidateCompsFromClipboard}
+            >
+              <Clipboard aria-hidden="true" />
+              Import Clipboard
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={addCandidateComp}
+            >
+              <Plus aria-hidden="true" />
+              Add Candidate
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">
+              {candidateComps.length} candidate
+              {candidateComps.length === 1 ? "" : "s"}
+            </Badge>
+            {candidateIssueCount > 0 ? (
+              <Badge variant="warning">{candidateIssueCount} to review</Badge>
+            ) : null}
+            {candidateImportStatus ? (
+              <span className="text-xs text-muted-foreground">
+                {candidateImportStatus}
+              </span>
+            ) : null}
+          </div>
+          {candidateComps.length === 0 ? (
+            <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+              No candidate comps recorded.
+            </div>
+          ) : (
+            candidateComps.map((comp) => (
+              <CandidateCompRow
+                key={comp.id}
+                comp={comp}
+                onPromote={promoteCandidateComp}
+                onRemove={removeCandidateComp}
+                onUpdateNumber={updateCandidateCompNumber}
+                onUpdateString={updateCandidateCompString}
+              />
+            ))
+          )}
+        </div>
+      </Section>
+
       <Section
         title="Comparable Sales"
         action={
@@ -4668,6 +4985,184 @@ function ResaleTab({
           }
         />
       </Section>
+    </div>
+  );
+}
+
+function CandidateCompRow({
+  comp,
+  onUpdateNumber,
+  onUpdateString,
+  onPromote,
+  onRemove
+}: {
+  comp: ResaleCandidateCompItem;
+  onUpdateNumber: (
+    comp: ResaleCandidateCompItem,
+    field: "sale_price" | "sqft" | "distance_miles",
+    label: string,
+    value: number | null
+  ) => void;
+  onUpdateString: (
+    comp: ResaleCandidateCompItem,
+    field: "address" | "confidence" | "notes" | "source_url",
+    label: string,
+    value: string
+  ) => void;
+  onPromote: (comp: ResaleCandidateCompItem) => void;
+  onRemove: (comp: ResaleCandidateCompItem) => void;
+}) {
+  const issues = getResaleCompIssues(comp);
+
+  return (
+    <div className="grid gap-3 rounded-md border border-border bg-card p-3">
+      <div className="grid gap-3 xl:grid-cols-[minmax(180px,1.4fr)_140px_110px_110px_130px_auto]">
+        <Field label="Address">
+          <Input
+            value={comp.address}
+            onChange={(event) =>
+              onUpdateString(
+                comp,
+                "address",
+                "Candidate address",
+                event.target.value
+              )
+            }
+          />
+        </Field>
+        <NumberField
+          label="Sale Price"
+          value={comp.salePrice}
+          onChange={(value) =>
+            onUpdateNumber(comp, "sale_price", "Candidate sale price", value)
+          }
+        />
+        <NumberField
+          label="Sqft"
+          value={comp.sqft}
+          onChange={(value) =>
+            onUpdateNumber(comp, "sqft", "Candidate sqft", value)
+          }
+        />
+        <NumberField
+          label="Distance"
+          value={comp.distanceMiles}
+          step="0.1"
+          onChange={(value) =>
+            onUpdateNumber(
+              comp,
+              "distance_miles",
+              "Candidate distance",
+              value
+            )
+          }
+        />
+        <Field label="Confidence">
+          <Select
+            value={comp.confidence || "unknown"}
+            onChange={(event) =>
+              onUpdateString(
+                comp,
+                "confidence",
+                "Candidate confidence",
+                event.target.value === "unknown" ? "" : event.target.value
+              )
+            }
+          >
+            <option value="unknown">Unknown</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </Select>
+        </Field>
+        <div className="flex items-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onPromote(comp)}
+          >
+            <BadgeDollarSign aria-hidden="true" />
+            Use as Comp
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => onRemove(comp)}
+            title="Remove candidate"
+          >
+            <Trash2 aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)]">
+        <InvestmentMetric
+          label="Comp $/Sqft"
+          value={getResaleCompPricePerSqft(comp)}
+        />
+        <Field label="Source URL">
+          <div className="flex gap-2">
+            <Input
+              value={comp.sourceUrl}
+              onChange={(event) =>
+                onUpdateString(
+                  comp,
+                  "source_url",
+                  "Candidate source URL",
+                  event.target.value
+                )
+              }
+            />
+            {comp.sourceUrl ? (
+              <Button type="button" variant="outline" size="icon" asChild>
+                <a
+                  href={comp.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open source"
+                >
+                  <LinkIcon aria-hidden="true" />
+                </a>
+              </Button>
+            ) : null}
+          </div>
+        </Field>
+        <Field label="Notes">
+          <Textarea
+            value={comp.notes}
+            onChange={(event) =>
+              onUpdateString(
+                comp,
+                "notes",
+                "Candidate notes",
+                event.target.value
+              )
+            }
+          />
+        </Field>
+      </div>
+      {issues.length > 0 ? (
+        <div className="grid gap-2 rounded-md border border-border bg-background p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="warning">Needs review</Badge>
+            <span className="text-xs text-muted-foreground">
+              {issues.length} issue{issues.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="grid gap-1">
+            {issues.map((issue) => (
+              <div key={issue.key} className="text-xs text-muted-foreground">
+                {issue.message}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="success">Candidate ready</Badge>
+        </div>
+      )}
     </div>
   );
 }

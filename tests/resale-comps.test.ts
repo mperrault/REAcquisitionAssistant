@@ -5,9 +5,11 @@ import {
   createPropertyRecord
 } from "@/lib/properties/property-persistence";
 import {
+  getResaleCandidateComps,
   getResaleCompIssues,
   getResaleCompPricePerSqft,
   getResaleCompSummary,
+  parseResaleCandidateCompRows,
   parseResaleCompRows
 } from "@/lib/properties/resale-comps";
 
@@ -148,6 +150,77 @@ describe("resale comparable sales", () => {
       "distance",
       "low_confidence",
       "low_confidence_notes"
+    ]);
+  });
+
+  it("reads candidate comps without including them in valuation comps", () => {
+    const property = createPropertyRecord({
+      id: "property-candidate-comp",
+      livingSqft: 1600,
+      facts: [
+        createPropertyFact({
+          id: "fact-candidate-address",
+          factKey: "resale.candidate_comp.a.address",
+          label: "Candidate address",
+          value: "22 Pond Rd"
+        }),
+        createPropertyFact({
+          id: "fact-candidate-price",
+          factKey: "resale.candidate_comp.a.sale_price",
+          label: "Candidate sale price",
+          value: 410000
+        }),
+        createPropertyFact({
+          id: "fact-candidate-sqft",
+          factKey: "resale.candidate_comp.a.sqft",
+          label: "Candidate sqft",
+          value: 1500
+        }),
+        createPropertyFact({
+          id: "fact-candidate-url",
+          factKey: "resale.candidate_comp.a.source_url",
+          label: "Candidate source URL",
+          value: "https://www.realtor.com/example"
+        })
+      ]
+    });
+
+    expect(getResaleCandidateComps(property)).toMatchObject([
+      {
+        address: "22 Pond Rd",
+        salePrice: 410000,
+        sqft: 1500,
+        sourceUrl: "https://www.realtor.com/example"
+      }
+    ]);
+    expect(getResaleCompSummary(property).comps).toHaveLength(0);
+    expect(getResaleCompSummary(property).suggestedResaleValue).toBeNull();
+  });
+
+  it("parses candidate comp rows with source URLs", () => {
+    const rows = parseResaleCandidateCompRows(`address,sale price,sqft,distance,confidence,notes,url
+"22 Pond Rd, Stafford, CT","$410,000",1500,1.2,medium,similar lake access,https://www.zillow.com/example
+24 Mill St | 395000 | 1450 | 1.8 | needs condition check | https://www.realtor.com/example`);
+
+    expect(rows).toEqual([
+      {
+        address: "22 Pond Rd, Stafford, CT",
+        salePrice: 410000,
+        sqft: 1500,
+        distanceMiles: 1.2,
+        confidence: "medium",
+        notes: "similar lake access",
+        sourceUrl: "https://www.zillow.com/example"
+      },
+      {
+        address: "24 Mill St",
+        salePrice: 395000,
+        sqft: 1450,
+        distanceMiles: 1.8,
+        confidence: "",
+        notes: "needs condition check",
+        sourceUrl: "https://www.realtor.com/example"
+      }
     ]);
   });
 });

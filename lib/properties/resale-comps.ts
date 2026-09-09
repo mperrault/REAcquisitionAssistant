@@ -11,6 +11,10 @@ export type ResaleCompItem = {
   firstIndex: number;
 };
 
+export type ResaleCandidateCompItem = ResaleCompItem & {
+  sourceUrl: string;
+};
+
 export type ResaleCompSummary = {
   comps: ResaleCompItem[];
   usableComps: ResaleCompItem[];
@@ -28,6 +32,10 @@ export type ParsedResaleCompRow = {
   notes: string;
 };
 
+export type ParsedResaleCandidateCompRow = ParsedResaleCompRow & {
+  sourceUrl: string;
+};
+
 export type ResaleCompIssue = {
   key: string;
   message: string;
@@ -35,6 +43,8 @@ export type ResaleCompIssue = {
 
 const resaleCompFactPattern =
   /^resale\.comp\.([^.]+)\.(address|sale_price|sqft|distance_miles|confidence|notes)$/;
+const resaleCandidateCompFactPattern =
+  /^resale\.candidate_comp\.([^.]+)\.(address|sale_price|sqft|distance_miles|confidence|notes|source_url)$/;
 
 function numericFactValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -246,6 +256,58 @@ export function getResaleCompSummary(
   };
 }
 
+export function getResaleCandidateComps(
+  property: PropertyRecord
+): ResaleCandidateCompItem[] {
+  const candidateMap = new Map<string, ResaleCandidateCompItem>();
+
+  property.facts.forEach((fact, index) => {
+    const match = fact.factKey.match(resaleCandidateCompFactPattern);
+
+    if (!match) {
+      return;
+    }
+
+    const [, id, field] = match;
+
+    if (!id || !field) {
+      return;
+    }
+
+    const existing = candidateMap.get(id) ?? {
+      id,
+      address: "",
+      salePrice: null,
+      sqft: null,
+      distanceMiles: null,
+      confidence: "",
+      notes: "",
+      sourceUrl: "",
+      firstIndex: index
+    };
+
+    if (field === "address") {
+      existing.address = stringFactValue(fact.value);
+    } else if (field === "sale_price") {
+      existing.salePrice = numericFactValue(fact.value);
+    } else if (field === "sqft") {
+      existing.sqft = numericFactValue(fact.value);
+    } else if (field === "distance_miles") {
+      existing.distanceMiles = numericFactValue(fact.value);
+    } else if (field === "confidence") {
+      existing.confidence = stringFactValue(fact.value);
+    } else if (field === "notes") {
+      existing.notes = stringFactValue(fact.value);
+    } else if (field === "source_url") {
+      existing.sourceUrl = stringFactValue(fact.value);
+    }
+
+    candidateMap.set(id, existing);
+  });
+
+  return [...candidateMap.values()].sort((a, b) => a.firstIndex - b.firstIndex);
+}
+
 export function parseResaleCompRows(text: string): ParsedResaleCompRow[] {
   return text
     .split(/\r?\n/)
@@ -279,5 +341,45 @@ export function parseResaleCompRows(text: string): ParsedResaleCompRow[] {
         row.sqft !== null ||
         row.distanceMiles !== null ||
         row.notes
+    );
+}
+
+export function parseResaleCandidateCompRows(
+  text: string
+): ParsedResaleCandidateCompRow[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(splitDelimitedLine)
+    .filter((parts) => {
+      const first = parts[0]?.toLowerCase() ?? "";
+
+      return first !== "address" && first !== "comp address";
+    })
+    .map((parts) => {
+      const confidenceCandidate = parts[4]?.trim().toLowerCase() ?? "";
+      const hasConfidenceColumn = ["low", "medium", "high"].includes(
+        confidenceCandidate
+      );
+
+      return {
+        address: parts[0] ?? "",
+        salePrice: parseNullableNumber(parts[1]),
+        sqft: parseNullableNumber(parts[2]),
+        distanceMiles: parseNullableNumber(parts[3]),
+        confidence: hasConfidenceColumn ? confidenceCandidate : "",
+        notes: hasConfidenceColumn ? (parts[5] ?? "") : (parts[4] ?? ""),
+        sourceUrl: hasConfidenceColumn ? (parts[6] ?? "") : (parts[5] ?? "")
+      };
+    })
+    .filter(
+      (row) =>
+        row.address ||
+        row.salePrice !== null ||
+        row.sqft !== null ||
+        row.distanceMiles !== null ||
+        row.notes ||
+        row.sourceUrl
     );
 }
