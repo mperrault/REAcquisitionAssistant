@@ -4689,6 +4689,17 @@ function ResaleTab({
     }
   }
 
+  async function copyCompImportHeader() {
+    try {
+      await navigator.clipboard.writeText(
+        "address,sale price,sqft,distance,confidence,notes"
+      );
+      setCompImportStatus("Copied comp import header.");
+    } catch {
+      setCompImportStatus("Clipboard copy failed.");
+    }
+  }
+
   async function importCandidateCompsFromClipboard() {
     try {
       const text = await navigator.clipboard.readText();
@@ -4710,6 +4721,17 @@ function ResaleTab({
       );
     } catch {
       setCandidateImportStatus("Clipboard import failed.");
+    }
+  }
+
+  async function copyCandidateImportHeader() {
+    try {
+      await navigator.clipboard.writeText(
+        "address,sale price,sqft,distance,confidence,notes,url"
+      );
+      setCandidateImportStatus("Copied candidate import header.");
+    } catch {
+      setCandidateImportStatus("Clipboard copy failed.");
     }
   }
 
@@ -4816,7 +4838,7 @@ function ResaleTab({
 
       <Section title="Comp Search">
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-          <Field label="Search Area">
+          <Field label="Sold Search Area">
             <Input
               value={compSearchQuery}
               onChange={(event) => setCompSearchQuery(event.target.value)}
@@ -4855,10 +4877,19 @@ function ResaleTab({
               type="button"
               variant="outline"
               size="sm"
+              onClick={copyCandidateImportHeader}
+            >
+              <ClipboardCheck aria-hidden="true" />
+              Copy Format
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={importCandidateCompsFromClipboard}
             >
               <Clipboard aria-hidden="true" />
-              Import Clipboard
+              Import Candidates
             </Button>
             <Button
               type="button"
@@ -4874,6 +4905,7 @@ function ResaleTab({
       >
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Staging only</Badge>
             <Badge variant="outline">
               {candidateComps.length} candidate
               {candidateComps.length === 1 ? "" : "s"}
@@ -4889,7 +4921,7 @@ function ResaleTab({
           </div>
           {candidateComps.length === 0 ? (
             <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
-              No candidate comps recorded.
+              No candidate comps yet.
             </div>
           ) : (
             candidateComps.map((comp) => (
@@ -4914,10 +4946,19 @@ function ResaleTab({
               type="button"
               variant="outline"
               size="sm"
+              onClick={copyCompImportHeader}
+            >
+              <ClipboardCheck aria-hidden="true" />
+              Copy Format
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
               onClick={importCompsFromClipboard}
             >
               <Clipboard aria-hidden="true" />
-              Import Clipboard
+              Import Comps
             </Button>
             <Button
               type="button"
@@ -4938,6 +4979,7 @@ function ResaleTab({
       >
         <div className="grid gap-3">
           <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Used for score</Badge>
             <Badge variant="outline">
               {resaleSummary.usableComps.length} usable
             </Badge>
@@ -4957,7 +4999,7 @@ function ResaleTab({
           </div>
           {resaleSummary.comps.length === 0 ? (
             <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
-              No comparable sales recorded.
+              No scoring comps yet.
             </div>
           ) : (
             resaleSummary.comps.map((comp) => (
@@ -5013,6 +5055,8 @@ function CandidateCompRow({
   onRemove: (comp: ResaleCandidateCompItem) => void;
 }) {
   const issues = getResaleCompIssues(comp);
+  const canPromote =
+    Boolean(comp.address.trim()) && comp.salePrice !== null && comp.sqft !== null;
 
   return (
     <div className="grid gap-3 rounded-md border border-border bg-card p-3">
@@ -5081,6 +5125,12 @@ function CandidateCompRow({
             variant="outline"
             size="sm"
             onClick={() => onPromote(comp)}
+            disabled={!canPromote}
+            title={
+              canPromote
+                ? "Move candidate to scoring comps"
+                : "Address, sale price, and sqft are required"
+            }
           >
             <BadgeDollarSign aria-hidden="true" />
             Use as Comp
