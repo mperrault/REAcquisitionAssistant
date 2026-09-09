@@ -68,6 +68,7 @@ import {
   getRenovationExpectedCost
 } from "@/lib/properties/property-dashboard";
 import {
+  getResaleCompIssues,
   getResaleCompPricePerSqft,
   getResaleCompSummary,
   parseResaleCompRows,
@@ -4335,16 +4336,34 @@ function ResaleTab({
   const projectedTotal = getProjectedTotalInvestment(draft);
   const scoringResaleValue =
     estimatedResaleValue ?? resaleSummary.suggestedResaleValue;
-  const scoringValueSource = estimatedResaleValue !== null
-    ? "Manual Override"
-    : resaleSummary.suggestedResaleValue
-      ? "Suggested Resale"
-      : "Not Set";
+  const scoringValueSource =
+    estimatedResaleValue !== null
+      ? "Manual override"
+      : resaleSummary.suggestedResaleValue !== null
+        ? "Suggested resale"
+        : "No resale value";
   const incompleteCompCount =
     resaleSummary.comps.length - resaleSummary.usableComps.length;
   const lowConfidenceCompCount = resaleSummary.comps.filter(
     (comp) => comp.confidence === "low" || !comp.confidence
   ).length;
+  const compIssueCount = resaleSummary.comps.reduce(
+    (total, comp) => total + getResaleCompIssues(comp).length,
+    0
+  );
+  const resaleDiagnostics = [
+    estimatedResaleValue !== null
+      ? "Score uses the manual resale override."
+      : resaleSummary.suggestedResaleValue !== null
+        ? `Score uses the suggested resale value from ${resaleSummary.usableComps.length} usable comp${resaleSummary.usableComps.length === 1 ? "" : "s"}.`
+        : "Score has no resale value input yet.",
+    incompleteCompCount > 0
+      ? `${incompleteCompCount} comp${incompleteCompCount === 1 ? "" : "s"} excluded from valuation because sale price or sqft is missing.`
+      : null,
+    lowConfidenceCompCount > 0
+      ? `${lowConfidenceCompCount} comp${lowConfidenceCompCount === 1 ? "" : "s"} need confidence review.`
+      : null
+  ].filter(Boolean);
   const impliedSpread =
     scoringResaleValue !== null && projectedTotal !== null
       ? scoringResaleValue - projectedTotal
@@ -4553,6 +4572,21 @@ function ResaleTab({
             </div>
           </div>
         </div>
+        <div className="mt-4 grid gap-2 rounded-md border border-border bg-card p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium">Resale Diagnostics</span>
+            <Badge variant={compIssueCount > 0 ? "warning" : "success"}>
+              {compIssueCount > 0 ? `${compIssueCount} to review` : "Ready"}
+            </Badge>
+          </div>
+          <div className="grid gap-1">
+            {resaleDiagnostics.map((item) => (
+              <div key={item} className="text-sm text-muted-foreground">
+                {item}
+              </div>
+            ))}
+          </div>
+        </div>
       </Section>
 
       <Section
@@ -4595,7 +4629,7 @@ function ResaleTab({
             ) : null}
             {lowConfidenceCompCount > 0 ? (
               <Badge variant="secondary">
-                {lowConfidenceCompCount} low-confidence
+                {lowConfidenceCompCount} confidence review
               </Badge>
             ) : null}
             {compImportStatus ? (
@@ -4610,104 +4644,13 @@ function ResaleTab({
             </div>
           ) : (
             resaleSummary.comps.map((comp) => (
-              <div
+              <ResaleCompRow
                 key={comp.id}
-                className="grid gap-3 rounded-md border border-border bg-card p-3 xl:grid-cols-[minmax(180px,1.4fr)_140px_110px_110px_130px_44px]"
-              >
-                <Field label="Address">
-                  <Input
-                    value={comp.address}
-                    onChange={(event) =>
-                      updateCompString(
-                        comp,
-                        "address",
-                        "Comp address",
-                        event.target.value
-                      )
-                    }
-                  />
-                </Field>
-                <NumberField
-                  label="Sale Price"
-                  value={comp.salePrice}
-                  onChange={(value) =>
-                    updateCompNumber(
-                      comp,
-                      "sale_price",
-                      "Comp sale price",
-                      value
-                    )
-                  }
-                />
-                <NumberField
-                  label="Sqft"
-                  value={comp.sqft}
-                  onChange={(value) =>
-                    updateCompNumber(comp, "sqft", "Comp sqft", value)
-                  }
-                />
-                <NumberField
-                  label="Distance"
-                  value={comp.distanceMiles}
-                  step="0.1"
-                  onChange={(value) =>
-                    updateCompNumber(
-                      comp,
-                      "distance_miles",
-                      "Comp distance",
-                      value
-                    )
-                  }
-                />
-                <Field label="Confidence">
-                  <Select
-                    value={comp.confidence || "unknown"}
-                    onChange={(event) =>
-                      updateCompString(
-                        comp,
-                        "confidence",
-                        "Comp confidence",
-                        event.target.value === "unknown"
-                          ? ""
-                          : event.target.value
-                      )
-                    }
-                  >
-                    <option value="unknown">Unknown</option>
-                    <option value="low">Low</option>
-                    <option value="medium">Medium</option>
-                    <option value="high">High</option>
-                  </Select>
-                </Field>
-                <div className="flex items-end">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={() => removeComp(comp)}
-                    title="Remove comp"
-                  >
-                    <Trash2 aria-hidden="true" />
-                  </Button>
-                </div>
-                <InvestmentMetric
-                  label="Comp $/Sqft"
-                  value={getResaleCompPricePerSqft(comp)}
-                />
-                <Field label="Notes" className="xl:col-span-5">
-                  <Textarea
-                    value={comp.notes}
-                    onChange={(event) =>
-                      updateCompString(
-                        comp,
-                        "notes",
-                        "Comp notes",
-                        event.target.value
-                      )
-                    }
-                  />
-                </Field>
-              </div>
+                comp={comp}
+                onUpdateNumber={updateCompNumber}
+                onUpdateString={updateCompString}
+                onRemove={removeComp}
+              />
             ))
           )}
         </div>
@@ -4729,6 +4672,128 @@ function ResaleTab({
   );
 }
 
+function ResaleCompRow({
+  comp,
+  onUpdateNumber,
+  onUpdateString,
+  onRemove
+}: {
+  comp: ResaleCompItem;
+  onUpdateNumber: (
+    comp: ResaleCompItem,
+    field: "sale_price" | "sqft" | "distance_miles",
+    label: string,
+    value: number | null
+  ) => void;
+  onUpdateString: (
+    comp: ResaleCompItem,
+    field: "address" | "confidence" | "notes",
+    label: string,
+    value: string
+  ) => void;
+  onRemove: (comp: ResaleCompItem) => void;
+}) {
+  const issues = getResaleCompIssues(comp);
+
+  return (
+    <div className="grid gap-3 rounded-md border border-border bg-card p-3">
+      <div className="grid gap-3 xl:grid-cols-[minmax(180px,1.4fr)_140px_110px_110px_130px_44px]">
+        <Field label="Address">
+          <Input
+            value={comp.address}
+            onChange={(event) =>
+              onUpdateString(comp, "address", "Comp address", event.target.value)
+            }
+          />
+        </Field>
+        <NumberField
+          label="Sale Price"
+          value={comp.salePrice}
+          onChange={(value) =>
+            onUpdateNumber(comp, "sale_price", "Comp sale price", value)
+          }
+        />
+        <NumberField
+          label="Sqft"
+          value={comp.sqft}
+          onChange={(value) => onUpdateNumber(comp, "sqft", "Comp sqft", value)}
+        />
+        <NumberField
+          label="Distance"
+          value={comp.distanceMiles}
+          step="0.1"
+          onChange={(value) =>
+            onUpdateNumber(comp, "distance_miles", "Comp distance", value)
+          }
+        />
+        <Field label="Confidence">
+          <Select
+            value={comp.confidence || "unknown"}
+            onChange={(event) =>
+              onUpdateString(
+                comp,
+                "confidence",
+                "Comp confidence",
+                event.target.value === "unknown" ? "" : event.target.value
+              )
+            }
+          >
+            <option value="unknown">Unknown</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </Select>
+        </Field>
+        <div className="flex items-end">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={() => onRemove(comp)}
+            title="Remove comp"
+          >
+            <Trash2 aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+      <div className="grid gap-3 xl:grid-cols-[150px_minmax(0,1fr)]">
+        <InvestmentMetric
+          label="Comp $/Sqft"
+          value={getResaleCompPricePerSqft(comp)}
+        />
+        <Field label="Notes">
+          <Textarea
+            value={comp.notes}
+            onChange={(event) =>
+              onUpdateString(comp, "notes", "Comp notes", event.target.value)
+            }
+          />
+        </Field>
+      </div>
+      {issues.length > 0 ? (
+        <div className="grid gap-2 rounded-md border border-border bg-background p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="warning">Needs review</Badge>
+            <span className="text-xs text-muted-foreground">
+              {issues.length} issue{issues.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="grid gap-1">
+            {issues.map((issue) => (
+              <div key={issue.key} className="text-xs text-muted-foreground">
+                {issue.message}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="success">Comp ready</Badge>
+        </div>
+      )}
+    </div>
+  );
+}
 function FinancialsTab({
   draft,
   updateDraft

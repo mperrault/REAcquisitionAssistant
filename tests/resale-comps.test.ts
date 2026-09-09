@@ -5,6 +5,7 @@ import {
   createPropertyRecord
 } from "@/lib/properties/property-persistence";
 import {
+  getResaleCompIssues,
   getResaleCompPricePerSqft,
   getResaleCompSummary,
   parseResaleCompRows
@@ -108,6 +109,45 @@ describe("resale comparable sales", () => {
         confidence: "",
         notes: "similar condition"
       }
+    ]);
+  });
+
+  it("identifies comp fields that need review", () => {
+    const property = createPropertyRecord({
+      id: "property-comp-review",
+      facts: [
+        createPropertyFact({
+          id: "fact-comp-a-address",
+          factKey: "resale.comp.a.address",
+          label: "Comp address",
+          value: "10 Lake Rd"
+        }),
+        createPropertyFact({
+          id: "fact-comp-a-price",
+          factKey: "resale.comp.a.sale_price",
+          label: "Comp sale price",
+          value: 420000
+        }),
+        createPropertyFact({
+          id: "fact-comp-a-sqft",
+          factKey: "resale.comp.a.sqft",
+          label: "Comp sqft",
+          value: 1400
+        }),
+        createPropertyFact({
+          id: "fact-comp-a-confidence",
+          factKey: "resale.comp.a.confidence",
+          label: "Comp confidence",
+          value: "low"
+        })
+      ]
+    });
+    const [comp] = getResaleCompSummary(property).comps;
+
+    expect(getResaleCompIssues(comp!).map((issue) => issue.key)).toEqual([
+      "distance",
+      "low_confidence",
+      "low_confidence_notes"
     ]);
   });
 });

@@ -28,6 +28,11 @@ export type ParsedResaleCompRow = {
   notes: string;
 };
 
+export type ResaleCompIssue = {
+  key: string;
+  message: string;
+};
+
 const resaleCompFactPattern =
   /^resale\.comp\.([^.]+)\.(address|sale_price|sqft|distance_miles|confidence|notes)$/;
 
@@ -111,6 +116,59 @@ export function getResaleCompPricePerSqft(comp: ResaleCompItem) {
   }
 
   return Math.round(comp.salePrice / comp.sqft);
+}
+
+export function getResaleCompIssues(comp: ResaleCompItem): ResaleCompIssue[] {
+  const issues: ResaleCompIssue[] = [];
+
+  if (!comp.address.trim()) {
+    issues.push({
+      key: "address",
+      message: "Address is missing."
+    });
+  }
+
+  if (comp.salePrice === null) {
+    issues.push({
+      key: "sale_price",
+      message: "Sale price is missing."
+    });
+  }
+
+  if (comp.sqft === null || comp.sqft <= 0) {
+    issues.push({
+      key: "sqft",
+      message: "Sqft is missing."
+    });
+  }
+
+  if (comp.distanceMiles === null) {
+    issues.push({
+      key: "distance",
+      message: "Distance is missing."
+    });
+  }
+
+  if (!comp.confidence) {
+    issues.push({
+      key: "confidence",
+      message: "Confidence is not set."
+    });
+  } else if (comp.confidence === "low") {
+    issues.push({
+      key: "low_confidence",
+      message: "Confidence is low."
+    });
+  }
+
+  if (comp.confidence === "low" && !comp.notes.trim()) {
+    issues.push({
+      key: "low_confidence_notes",
+      message: "Add notes for a low-confidence comp."
+    });
+  }
+
+  return issues;
 }
 
 export function getResaleCompSummary(
