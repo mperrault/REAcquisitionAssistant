@@ -116,7 +116,7 @@ type RenovationInference = {
 type SettingInference = Array<z.infer<typeof inferredFactSchema>>;
 
 const noPreferredSettingMatchFactKey = "setting.no_preferred_match";
-const defaultStylePhotoLimit = 8;
+const defaultStylePhotoLimit = 3;
 
 function isNoPreferredSettingMatchFact(fact: z.infer<typeof inferredFactSchema>) {
   return fact.factKey === noPreferredSettingMatchFactKey;
@@ -1309,7 +1309,9 @@ async function inferHouseStyleFromPhotos(
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_VISION_MODEL?.trim() || "gpt-5-mini",
+        model:
+          process.env.OPENAI_STYLE_MODEL?.trim() ||
+          "gpt-5.6-luna",
         input: [
           {
             role: "user",
@@ -1359,12 +1361,12 @@ async function inferHouseStyleFromPhotos(
   }
 
   if (imageUrls.length > 1) {
-    for (const imageUrl of imageUrls) {
-      const singleImageResult = await requestStyle([imageUrl]);
+    // One targeted retry is enough for style classification. Retrying every
+    // image sequentially made this stage disproportionately slow.
+    const singleImageResult = await requestStyle([imageUrls[0]]);
 
-      if (singleImageResult.style) {
-        return singleImageResult;
-      }
+    if (singleImageResult.style) {
+      return singleImageResult;
     }
   }
 
@@ -1522,6 +1524,12 @@ async function inferRenovationsFromPhotos(
     totalPhotos: number;
     batchPhotoCount: number;
     status: "started" | "success" | "warning";
+    phase:
+      | "preparing"
+      | "requesting"
+      | "validating"
+      | "retrying"
+      | "complete";
     detail: string;
   }) => void
 ): Promise<{ renovation: RenovationInference | null; warning: string | null }> {
@@ -1609,8 +1617,38 @@ async function inferRenovationsFromPhotos(
     };
   }
 
-  async function analyzeBatch(batch: string[]) {
+  async function analyzeBatch(
+    batch: string[],
+    batchNumber: number,
+    totalBatches: number,
+    processedBeforeBatch: number
+  ) {
+    onProgress?.({
+      batchNumber,
+      totalBatches,
+      processedPhotos: processedBeforeBatch,
+      totalPhotos: imageUrls.length,
+      batchPhotoCount: batch.length,
+      status: "started",
+      phase: "requesting",
+      detail:
+        `Sending ${batch.length} photo${batch.length === 1 ? "" : "s"} to AI for visible-condition analysis. ` +
+        "Checking for material wear, damage, dated finishes, functional issues, and near-term renovation needs."
+    });
+
     const result = await requestRenovation(batch);
+
+    onProgress?.({
+      batchNumber,
+      totalBatches,
+      processedPhotos: processedBeforeBatch,
+      totalPhotos: imageUrls.length,
+      batchPhotoCount: batch.length,
+      status: "started",
+      phase: "validating",
+      detail:
+        "AI response received. Validating confidence, removing routine-maintenance-only items, and consolidating renovation findings."
+    });
 
     if (result.renovation || responseWarningIsNotImageSpecific(result.warning)) {
       return result;
@@ -1619,9 +1657,34 @@ async function inferRenovationsFromPhotos(
     if (batch.length > 1) {
       const singleImageResults: RenovationInference[] = [];
 
-      for (const imageUrl of batch) {
+      onProgress?.({
+        batchNumber,
+        totalBatches,
+        processedPhotos: processedBeforeBatch,
+        totalPhotos: imageUrls.length,
+        batchPhotoCount: batch.length,
+        status: "warning",
+        phase: "retrying",
+        detail:
+          `The batch request appears to contain an image-specific problem. Retrying up to ${batch.length} photo${batch.length === 1 ? "" : "s"} individually so usable photos are not lost.`
+      });
+
+      for (let retryIndex = 0; retryIndex < batch.length; retryIndex += 1) {
         throwIfAborted(signal);
-        const singleImageResult = await requestRenovation([imageUrl]);
+
+        onProgress?.({
+          batchNumber,
+          totalBatches,
+          processedPhotos: processedBeforeBatch,
+          totalPhotos: imageUrls.length,
+          batchPhotoCount: batch.length,
+          status: "started",
+          phase: "retrying",
+          detail:
+            `Retrying photo ${retryIndex + 1} of ${batch.length} from batch ${batchNumber}.`
+        });
+
+        const singleImageResult = await requestRenovation([batch[retryIndex]]);
 
         if (singleImageResult.renovation) {
           singleImageResults.push(singleImageResult.renovation);
@@ -1655,10 +1718,18 @@ async function inferRenovationsFromPhotos(
       totalPhotos: imageUrls.length,
       batchPhotoCount: batch.length,
       status: "started",
-      detail: `Starting batch ${batchNumber} of ${totalBatches}: ${batch.length} photo${batch.length === 1 ? "" : "s"}.`
+      phase: "preparing",
+      detail:
+        `Preparing batch ${batchNumber} of ${totalBatches}: ${batch.length} photo${batch.length === 1 ? "" : "s"}. ` +
+        `${index}/${imageUrls.length} photos processed so far (${Math.round((index / imageUrls.length) * 100)}%).`
     });
 
-    const result = await analyzeBatch(batch);
+    const result = await analyzeBatch(
+      batch,
+      batchNumber,
+      totalBatches,
+      index
+    );
     const processedPhotos = Math.min(index + batch.length, imageUrls.length);
 
     if (result.renovation) {
@@ -1670,7 +1741,12 @@ async function inferRenovationsFromPhotos(
         totalPhotos: imageUrls.length,
         batchPhotoCount: batch.length,
         status: "success",
-        detail: `Batch ${batchNumber} of ${totalBatches} complete — ${processedPhotos}/${imageUrls.length} photos processed.`
+        phase: "complete",
+        detail:
+          `Batch ${batchNumber} of ${totalBatches} complete — ${processedPhotos}/${imageUrls.length} photos processed ` +
+          `(${Math.round((processedPhotos / imageUrls.length) * 100)}%). ` +
+          `${result.renovation.scopeFacts.length} renovation scope${result.renovation.scopeFacts.length === 1 ? "" : "s"} and ` +
+          `${result.renovation.lineItems.length} cost item${result.renovation.lineItems.length === 1 ? "" : "s"} identified in this batch.`
       });
     } else if (result.warning) {
       warnings.push(result.warning);
@@ -1681,7 +1757,10 @@ async function inferRenovationsFromPhotos(
         totalPhotos: imageUrls.length,
         batchPhotoCount: batch.length,
         status: "warning",
-        detail: `Batch ${batchNumber} of ${totalBatches} completed with a warning — ${processedPhotos}/${imageUrls.length} photos processed. ${result.warning}`
+        phase: "complete",
+        detail:
+          `Batch ${batchNumber} of ${totalBatches} completed with a warning — ${processedPhotos}/${imageUrls.length} photos processed ` +
+          `(${Math.round((processedPhotos / imageUrls.length) * 100)}%). ${result.warning}`
       });
     }
   }
@@ -2106,6 +2185,17 @@ export async function enrichListingCandidate(
     );
   }
 
+  // Start style inference immediately from saved request evidence so it runs
+  // in parallel with the listing-page fetch. The result is awaited only when
+  // the existing enrichment branch needs it.
+  const requestStylePromise = inferStyleFromRequestEvidence({
+    shouldInferStyle: shouldFillStyleFromRequest,
+    requestTextStyle,
+    requestPhotoUrls,
+    fetcher,
+    addDiagnostic
+  });
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   const listingFetchSignal = combineAbortSignals([
@@ -2139,13 +2229,7 @@ export async function enrichListingCandidate(
         `Listing page fetch failed with HTTP ${response.status}.`,
         "The app will use saved candidate photos and listing remarks when available."
       );
-      const requestStyle = await inferStyleFromRequestEvidence({
-        shouldInferStyle: shouldFillStyleFromRequest,
-        requestTextStyle,
-        requestPhotoUrls,
-        fetcher,
-        addDiagnostic
-      });
+      const requestStyle = await requestStylePromise;
       if (requestStyle.failureReason) {
         warnings.push(
           `House style inference failed: ${requestStyle.failureReason}.`
@@ -2176,11 +2260,17 @@ export async function enrichListingCandidate(
               addDiagnostic(
                 "renovation batch",
                 progress.status,
-                progress.status === "started"
-                  ? `Processing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches}.`
-                  : progress.status === "success"
-                    ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
-                    : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
+                progress.phase === "preparing"
+                  ? `Preparing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                  : progress.phase === "requesting"
+                    ? `Analyzing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} with AI.`
+                    : progress.phase === "validating"
+                      ? `Validating renovation findings for batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                      : progress.phase === "retrying"
+                        ? `Recovering usable photos from renovation batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                        : progress.status === "success"
+                          ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
+                          : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
                 progress.detail
               )
           )
@@ -2267,13 +2357,7 @@ export async function enrichListingCandidate(
         "Fetched listing page did not include candidate address.",
         "The app will avoid applying page-derived price or photo data."
       );
-      const requestStyle = await inferStyleFromRequestEvidence({
-        shouldInferStyle: shouldFillStyleFromRequest,
-        requestTextStyle,
-        requestPhotoUrls,
-        fetcher,
-        addDiagnostic
-      });
+      const requestStyle = await requestStylePromise;
       if (requestStyle.failureReason) {
         warnings.push(
           `House style inference failed: ${requestStyle.failureReason}.`
@@ -2302,11 +2386,17 @@ export async function enrichListingCandidate(
               addDiagnostic(
                 "renovation batch",
                 progress.status,
-                progress.status === "started"
-                  ? `Processing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches}.`
-                  : progress.status === "success"
-                    ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
-                    : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
+                progress.phase === "preparing"
+                  ? `Preparing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                  : progress.phase === "requesting"
+                    ? `Analyzing renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} with AI.`
+                    : progress.phase === "validating"
+                      ? `Validating renovation findings for batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                      : progress.phase === "retrying"
+                        ? `Recovering usable photos from renovation batch ${progress.batchNumber} of ${progress.totalBatches}.`
+                        : progress.status === "success"
+                          ? `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} complete.`
+                          : `Renovation photo batch ${progress.batchNumber} of ${progress.totalBatches} completed with a warning.`,
                 progress.detail
               )
           )
@@ -2591,13 +2681,7 @@ export async function enrichListingCandidate(
       "The app will use saved candidate photos and listing remarks when available."
     );
 
-    const requestStyle = await inferStyleFromRequestEvidence({
-      shouldInferStyle: shouldFillStyleFromRequest,
-      requestTextStyle,
-      requestPhotoUrls,
-      fetcher,
-      addDiagnostic
-    });
+    const requestStyle = await requestStylePromise;
     if (requestStyle.failureReason) {
       warnings.push(
         `House style inference failed: ${requestStyle.failureReason}.`

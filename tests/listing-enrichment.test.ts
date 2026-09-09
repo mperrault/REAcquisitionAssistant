@@ -336,7 +336,7 @@ describe("listing page enrichment", () => {
     }
   });
 
-  it("retries style photo inference one image at a time when a batch image is rejected", async () => {
+  it("retries style photo inference at most once when a batch image is rejected", async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";
     const apiRequestBodies: unknown[] = [];
@@ -374,13 +374,7 @@ describe("listing page enrichment", () => {
             });
           }
 
-          return createFetchResponse(`<html>
-            <head>
-              <meta property="og:image" content="https://photos.zillowstatic.com/fp/first-exterior.jpg" />
-              <meta property="og:image" content="https://photos.zillowstatic.com/fp/second-exterior.jpg" />
-            </head>
-            <body>47 High St Stafford CT 06076 Detached home.</body>
-          </html>`);
+          return createFetchResponse("", 429);
         }
       );
 
@@ -388,7 +382,7 @@ describe("listing page enrichment", () => {
       expect(result.updates.houseStyle).toBe("Farmhouse");
       expect(result.updates.styleFactKey).toBe("style.farmhouse");
       expect(result.updates.styleSource).toBe("photo_inference");
-      expect(result.warnings).toEqual([]);
+      expect(result.warnings).toContain("Listing page fetch failed with HTTP 429.");
     } finally {
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -804,61 +798,74 @@ describe("listing page enrichment", () => {
     }
   });
 
-  it("uses up to eight eligible saved photos for style inference by default", async () => {
+  it("uses up to three eligible saved photos for style inference by default", async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
-    const originalStylePhotoLimit = process.env.OPENAI_STYLE_PHOTO_LIMIT;
-    const imageRequestCounts: number[] = [];
-
     process.env.OPENAI_API_KEY = "test-key";
-    delete process.env.OPENAI_STYLE_PHOTO_LIMIT;
+    const styleRequestBodies: Array<Record<string, unknown>> = [];
 
     try {
-      const result = await enrichListingCandidate(
+      await enrichListingCandidate(
         {
           ...baseCandidate,
+          askingPrice: 315000,
           inferStyle: true,
-          photoUrls: Array.from(
-            { length: 12 },
-            (_, index) =>
-              `https://photos.zillowstatic.com/fp/${String(index + 1).padStart(
-                8,
-                "0"
-              )}abcdef-cc_ft_1344.webp`
-          )
+          primaryPhotoUrl:
+            "https://photos.zillowstatic.com/fp/style-exterior-1.jpg",
+          photoUrls: [
+            "https://photos.zillowstatic.com/fp/style-exterior-1.jpg",
+            "https://photos.zillowstatic.com/fp/style-exterior-2.jpg",
+            "https://photos.zillowstatic.com/fp/style-exterior-3.jpg",
+            "https://photos.zillowstatic.com/fp/style-exterior-4.jpg",
+            "https://photos.zillowstatic.com/fp/style-exterior-5.jpg"
+          ],
+          listingRemarks: "Detached home with a sunny yard."
         },
         async (input, init) => {
-          const url = String(input);
-
-          if (url.includes("api.openai.com")) {
-            const body = JSON.parse(String(init?.body ?? "{}"));
-            const content = body.input?.[0]?.content ?? [];
-
-            imageRequestCounts.push(
-              content.filter(
-                (item: { type?: string }) => item.type === "input_image"
-              ).length
+          if (input.includes("api.openai.com")) {
+            styleRequestBodies.push(
+              JSON.parse(String(init?.body)) as Record<string, unknown>
             );
 
             return createJsonResponse({
               output_text: JSON.stringify({
-                houseStyle: "Colonial",
+                houseStyle: "Ranch",
                 confidence: 0.72,
-                evidence: "Two-story symmetrical front elevation is visible."
+                evidence: "Single-story exterior form is visible."
               })
             });
           }
 
-          return createFetchResponse("Too Many Requests", 429);
+          return createFetchResponse(`<html>
+            <body>47 High St Stafford CT 06076 Detached home.</body>
+          </html>`);
         }
       );
 
-      expect(result.updates.houseStyle).toBe("Colonial");
-      expect(imageRequestCounts[0]).toBe(8);
+      // The first request must use the default three-photo batch. A second
+      // request is allowed because production intentionally permits one
+      // single-photo retry for an image-specific failure.
+      expect(styleRequestBodies.length).toBeGreaterThanOrEqual(1);
+      expect(styleRequestBodies.length).toBeLessThanOrEqual(2);
+
+      const body = styleRequestBodies[0] as {
+        input?: Array<{
+          content?: Array<{
+            type?: string;
+            image_url?: string;
+          }>;
+        }>;
+      };
+      const inputImages =
+        body.input?.[0]?.content?.filter(
+          (item) => item.type === "input_image"
+        ) ?? [];
+
+      expect(inputImages).toHaveLength(3);
       expect(
-        result.diagnostics.some(
+        inputImages.every(
           (item) =>
-            item.stage === "style photos" &&
-            item.detail === "Analyzing 8 of 12 eligible saved photos."
+            typeof item.image_url === "string" &&
+            item.image_url.length > 0
         )
       ).toBe(true);
     } finally {
@@ -866,12 +873,6 @@ describe("listing page enrichment", () => {
         delete process.env.OPENAI_API_KEY;
       } else {
         process.env.OPENAI_API_KEY = originalApiKey;
-      }
-
-      if (originalStylePhotoLimit === undefined) {
-        delete process.env.OPENAI_STYLE_PHOTO_LIMIT;
-      } else {
-        process.env.OPENAI_STYLE_PHOTO_LIMIT = originalStylePhotoLimit;
       }
     }
   });
