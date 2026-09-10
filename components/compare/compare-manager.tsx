@@ -568,7 +568,7 @@ function PropertyColumnHeader({
             fill
             sizes="256px"
             className="object-cover"
-            loading="lazy"
+            priority
             unoptimized
             referrerPolicy="no-referrer"
           />
