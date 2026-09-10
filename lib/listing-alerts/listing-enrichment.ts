@@ -220,9 +220,19 @@ const styleDefinitions = [
     patterns: [/\bcape cod\b/i, /\bcape\b/i]
   },
   {
+    houseStyle: "Saltbox",
+    styleFactKey: "style.saltbox",
+    patterns: [/\bsaltbox\b/i, /\bsalt box\b/i]
+  },
+  {
     houseStyle: "Cottage",
     styleFactKey: "style.cottage",
-    patterns: [/\bcottage\b/i, /\bbungalow\b/i]
+    patterns: [/\bcottage\b/i]
+  },
+  {
+    houseStyle: "Bungalow",
+    styleFactKey: "style.bungalow",
+    patterns: [/\bbungalow\b/i]
   },
   {
     houseStyle: "Farmhouse",
@@ -637,11 +647,52 @@ function getTextEvidence(text: string, pattern: RegExp) {
   return normalizeText(text.slice(snippetStart, end));
 }
 
+
+function inferExplicitHouseStyleFromText(text: string): StyleInference | null {
+  const normalized = normalizeText(text);
+
+  if (!normalized) {
+    return null;
+  }
+
+  for (const definition of styleDefinitions) {
+    const escapedStyle = definition.houseStyle.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&"
+    );
+    const explicitStylePattern = new RegExp(
+      `\\b(?:House Style|Architectural Style|Home Style|Property Style)\\s*:\\s*(${escapedStyle})\\b`,
+      "i"
+    );
+    const match = normalized.match(explicitStylePattern);
+
+    if (!match) {
+      continue;
+    }
+
+    return {
+      houseStyle: definition.houseStyle,
+      styleFactKey: definition.styleFactKey,
+      confidence: 0.99,
+      evidence: normalizeText(match[0]),
+      source: "listing_text"
+    };
+  }
+
+  return null;
+}
+
 function inferHouseStyleFromText(text: string): StyleInference | null {
   const normalized = normalizeText(text);
 
   if (!normalized) {
     return null;
+  }
+
+  const explicitStyle = inferExplicitHouseStyleFromText(normalized);
+
+  if (explicitStyle) {
+    return explicitStyle;
   }
 
   for (const definition of styleDefinitions) {
@@ -1329,7 +1380,7 @@ async function inferHouseStyleFromPhotos(
                 type: "input_text",
                 text:
                   "Classify the likely exterior house style from these real-estate photos. " +
-                  "Choose exactly one of: Cape, Cottage, Farmhouse, Ranch, Colonial, Contemporary, Log Home. " +
+                  "Choose exactly one of: Cape, Bungalow, Cottage, Farmhouse, Ranch, Saltbox, Colonial, Contemporary, Log Home. " +
                   "If uncertain, return confidence below 0.55. Return only JSON with keys houseStyle, confidence, evidence."
               },
               ...imageUrlsForRequest.map((imageUrl) => ({
@@ -2605,7 +2656,8 @@ export async function enrichListingCandidate(
     }
     let style =
       shouldFillStyle
-        ? requestTextStyle ??
+        ? inferExplicitHouseStyleFromText(metadata.pageText) ??
+          requestTextStyle ??
           inferHouseStyleFromText(
             `${metadata.pageText} ${parsedCandidate.listingRemarks}`
           )

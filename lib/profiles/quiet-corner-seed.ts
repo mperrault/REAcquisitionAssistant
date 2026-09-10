@@ -46,12 +46,14 @@ const settingPreferences = [
 
 const stylePreferences = [
   ["style.cape", "Cape", 1, 7],
-  ["style.cottage", "Cottage", 2, 6],
-  ["style.farmhouse", "Farmhouse", 3, 5],
-  ["style.ranch", "Ranch", 4, 3],
-  ["style.colonial", "Colonial", 5, 2],
-  ["style.contemporary", "Contemporary", 6, 1],
-  ["style.log_home", "Log Home", 7, 0]
+  ["style.bungalow", "Bungalow", 2, 7],
+  ["style.cottage", "Cottage", 3, 6],
+  ["style.farmhouse", "Farmhouse", 4, 5],
+  ["style.ranch", "Ranch", 5, 3],
+  ["style.saltbox", "Saltbox", 6, 3],
+  ["style.colonial", "Colonial", 7, 2],
+  ["style.contemporary", "Contemporary", 8, 1],
+  ["style.log_home", "Log Home", 9, 0]
 ] as const;
 
 const hardDealBreakers = [

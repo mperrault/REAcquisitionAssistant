@@ -88,12 +88,14 @@ Acreage should be treated as a supporting attribute, not a standalone goal.
 ## House style ranking
 
 1. Cape
-2. Cottage
-3. Farmhouse
-4. Ranch
-5. Colonial
-6. Contemporary
-7. Log Home
+2. Bungalow
+3. Cottage
+4. Farmhouse
+5. Ranch
+6. Saltbox
+7. Colonial
+8. Contemporary
+9. Log Home
 
 House style should have materially less scoring weight than setting.
 
@@ -180,4 +182,4 @@ The system should reward assets that cannot readily be created later:
 - historic character
 - resale appeal
 
-while treating kitchens, baths, flooring, paint, and other moderate-renovation items as correctable.
+while treating kitchens, baths, flooring, paint, and other moderate-renovation items as correctable.\nStyle scoring note: Bungalow carries the same style weight as Cape (7); Saltbox carries the same style weight as Ranch (3).\n

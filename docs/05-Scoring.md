@@ -102,12 +102,14 @@ The first profile values **landscape quality and visual setting more than waterf
 ## House style preference order
 
 1. Cape
-2. Cottage
-3. Farmhouse
-4. Ranch
-5. Colonial
-6. Contemporary
-7. Log Home
+2. Bungalow
+3. Cottage
+4. Farmhouse
+5. Ranch
+6. Saltbox
+7. Colonial
+8. Contemporary
+9. Log Home
 
 House style should have less weight than setting.
 
@@ -233,4 +235,4 @@ Suggested defaults:
 - below 60: Weak Match
 - any hard rejection: Rejected by Profile
 
-Thresholds should be configurable.
+Thresholds should be configurable.\nStyle scoring note: Bungalow carries the same style weight as Cape (7); Saltbox carries the same style weight as Ranch (3).\n
