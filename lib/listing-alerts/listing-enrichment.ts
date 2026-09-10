@@ -1024,40 +1024,41 @@ function parseVisionRenovationInference(text: string): RenovationInference | nul
           facts.findIndex((item) => item.factKey === fact.factKey) === index
       );
     const rawLineItems = Array.isArray(parsed.lineItems) ? parsed.lineItems : [];
-    const lineItems = rawLineItems
-      .flatMap((item) => {
-        if (!item || typeof item !== "object") {
-          return [];
+    const parsedLineItems = rawLineItems.flatMap((item) => {
+      if (!item || typeof item !== "object") {
+        return [];
+      }
+
+      const record = item as Record<string, unknown>;
+      const label =
+        typeof record.label === "string" ? normalizeText(record.label) : "";
+      const amount = parseCost(record.amount);
+      const confidence = parseConfidence(record.confidence);
+
+      if (!label || amount === null || confidence === null || confidence < 0.55) {
+        return [];
+      }
+
+      return [
+        {
+          factKey:
+            typeof record.factKey === "string" &&
+            record.factKey.startsWith("renovation.line_item.")
+              ? record.factKey
+              : `renovation.line_item.${slugFromLabel(label)}`,
+          label,
+          amount,
+          confidence,
+          evidence:
+            typeof record.evidence === "string"
+              ? normalizeText(record.evidence).slice(0, 240)
+              : "Visible in listing photos"
         }
-
-        const record = item as Record<string, unknown>;
-        const label =
-          typeof record.label === "string" ? normalizeText(record.label) : "";
-        const amount = parseCost(record.amount);
-        const confidence = parseConfidence(record.confidence);
-
-        if (!label || amount === null || confidence === null || confidence < 0.55) {
-          return [];
-        }
-
-        return [
-          {
-            factKey:
-              typeof record.factKey === "string" &&
-              record.factKey.startsWith("renovation.line_item.")
-                ? record.factKey
-                : `renovation.line_item.${slugFromLabel(label)}`,
-            label,
-            amount,
-            confidence,
-            evidence:
-              typeof record.evidence === "string"
-                ? normalizeText(record.evidence).slice(0, 240)
-                : "Visible in listing photos"
-          }
-        ];
-      })
-      .filter((item) => !isRoutineMaintenanceOnlyLineItem(item));
+      ];
+    });
+    const lineItems = parsedLineItems.filter(
+      (item) => !isRoutineMaintenanceOnlyLineItem(item)
+    );
     const derivedScopeFacts = lineItems
       .flatMap((lineItem) => {
         const derivedScope = inferRenovationScopeFromLineItem(lineItem);
@@ -1068,7 +1069,7 @@ function parseVisionRenovationInference(text: string): RenovationInference | nul
         (fact) => !scopeFacts.some((item) => item.factKey === fact.factKey)
       );
     const removedRoutineMaintenance =
-      rawLineItems.length > lineItems.length;
+      parsedLineItems.length > lineItems.length;
     const retainedLineItemTotal =
       lineItems.length > 0
         ? lineItems.reduce((total, item) => total + item.amount, 0)

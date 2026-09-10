@@ -59,4 +59,13 @@ describe("renovation progress diagnostics", () => {
     expect(text).toContain("progress.imageTotalCount ?? 0");
   });
 
+  it("distinguishes invalid line-item drops from routine-maintenance filtering", () => {
+    const text = source();
+
+    expect(text).toContain("const parsedLineItems = rawLineItems.flatMap");
+    expect(text).toContain("const lineItems = parsedLineItems.filter");
+    expect(text).toContain("parsedLineItems.length > lineItems.length");
+    expect(text).not.toContain("rawLineItems.length > lineItems.length");
+  });
+
 });
