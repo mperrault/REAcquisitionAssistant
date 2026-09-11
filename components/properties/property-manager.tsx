@@ -714,6 +714,146 @@ export function createBrowserCaptureBookmarklet() {
 
     const photoDetails = details.slice(0, 80);
     const photoUrls = photoDetails.map((photo) => photo.url);
+
+    const normalizedPageText = compact(text);
+    const structuredFactEvidence = [];
+
+    const findLabeledValue = (labels) => {
+      const lines = String(text || "")
+        .split(/\n+/)
+        .map(compact)
+        .filter(Boolean);
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+
+        for (const label of labels) {
+          const escaped = label.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&");
+          const inlineMatch = line.match(
+            new RegExp("^" + escaped + "\\s*:?\\s*(.+)$", "i")
+          );
+
+          if (inlineMatch?.[1] && compact(inlineMatch[1]) !== label) {
+            return { label, value: compact(inlineMatch[1]), rawText: line };
+          }
+
+          if (
+            new RegExp("^" + escaped + "\\s*:?$", "i").test(line) &&
+            lines[index + 1]
+          ) {
+            return {
+              label,
+              value: compact(lines[index + 1]),
+              rawText: line + ": " + compact(lines[index + 1])
+            };
+          }
+        }
+      }
+
+      return null;
+    };
+
+    const parseNumeric = (value) => {
+      if (!value) return null;
+      const match = String(value).replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+      if (!match) return null;
+      const number = Number(match[0]);
+      return Number.isFinite(number) && number >= 0 ? number : null;
+    };
+
+    const parseInteger = (value) => {
+      const number = parseNumeric(value);
+      return number === null ? null : Math.round(number);
+    };
+
+    const addEvidence = (factKey, label, value, match, source = "listing_field") => {
+      if (!match || value === null || value === "") return;
+      structuredFactEvidence.push({
+        factKey,
+        label,
+        value,
+        rawText: match.rawText || "",
+        source
+      });
+    };
+
+    const priceMatch = findLabeledValue(["List Price", "Price"]);
+    const bedsMatch = findLabeledValue(["Bedrooms", "Beds", "Total Bedrooms"]);
+    const bathsMatch = findLabeledValue(["Bathrooms", "Baths", "Total Bathrooms"]);
+    const sqftMatch = findLabeledValue([
+      "Living Area",
+      "Living Area Sq Ft",
+      "Square Feet",
+      "Sq Ft",
+      "Total Finished SqFt"
+    ]);
+    const lotMatch = findLabeledValue(["Lot Size Acres", "Lot Size", "Lot Size Area"]);
+    const yearBuiltMatch = findLabeledValue(["Year Built"]);
+    const styleMatch = findLabeledValue([
+      "House Style",
+      "Architectural Style",
+      "Home Style",
+      "Property Style"
+    ]);
+    const heatingMatch = findLabeledValue(["Heating", "Heating Features", "Heating Type"]);
+    const waterMatch = findLabeledValue(["Water Source", "Water"]);
+    const sewerMatch = findLabeledValue(["Sewer", "Sewer Type"]);
+    const garageMatch = findLabeledValue([
+      "Garage Spaces",
+      "Garage",
+      "Attached Garage Spaces"
+    ]);
+    const taxMatch = findLabeledValue([
+      "Annual Tax Amount",
+      "Annual Property Tax",
+      "Property Tax",
+      "Tax Annual Amount"
+    ]);
+    const hoaMatch = findLabeledValue([
+      "HOA Fee",
+      "Association Fee",
+      "Monthly HOA Fee"
+    ]);
+
+    const askingPrice = parseInteger(priceMatch?.value);
+    const bedrooms = parseNumeric(bedsMatch?.value);
+    const bathrooms = parseNumeric(bathsMatch?.value);
+    const livingSqft = parseInteger(sqftMatch?.value);
+    let lotAcres = parseNumeric(lotMatch?.value);
+
+    if (lotAcres !== null && /sq\.?\s*ft|square feet/i.test(lotMatch?.value || "")) {
+      lotAcres = Math.round((lotAcres / 43560) * 1000) / 1000;
+    }
+
+    const yearBuilt = parseInteger(yearBuiltMatch?.value);
+    const houseStyle = compact(styleMatch?.value || "");
+    const heatingType = compact(heatingMatch?.value || "");
+    const waterSource = compact(waterMatch?.value || "");
+    const sewerType = compact(sewerMatch?.value || "");
+    const garageSpaces = parseInteger(garageMatch?.value);
+    const annualPropertyTax = parseInteger(taxMatch?.value);
+    const hoaFee = parseInteger(hoaMatch?.value);
+    const hoaPresent =
+      hoaFee !== null
+        ? hoaFee > 0
+        : /\bhoa\b|homeowners association|association fee/i.test(normalizedPageText)
+          ? true
+          : null;
+
+    addEvidence("property.asking_price", "Asking Price", askingPrice, priceMatch);
+    addEvidence("property.bedrooms", "Bedrooms", bedrooms, bedsMatch);
+    addEvidence("property.bathrooms", "Bathrooms", bathrooms, bathsMatch);
+    addEvidence("property.living_sqft", "Living Sq Ft", livingSqft, sqftMatch);
+    addEvidence("property.lot_acres", "Lot Acres", lotAcres, lotMatch);
+    addEvidence("property.year_built", "Year Built", yearBuilt, yearBuiltMatch);
+    addEvidence("property.house_style", "House Style", houseStyle, styleMatch);
+    addEvidence("property.heating_type", "Heating Type", heatingType, heatingMatch);
+    addEvidence("property.water_source", "Water Source", waterSource, waterMatch);
+    addEvidence("property.sewer_type", "Sewer Type", sewerType, sewerMatch);
+    addEvidence("property.garage_spaces", "Garage Spaces", garageSpaces, garageMatch);
+    addEvidence("property.annual_property_tax", "Annual Property Tax", annualPropertyTax, taxMatch);
+    addEvidence("property.hoa_fee", "HOA Fee", hoaFee, hoaMatch);
+
     const special = text.match(/What's special\s+([\s\S]*?)(?:Show more|\d+\s+(?:minute|hour|day|month)s?\s+on\s+Zillow|Facts & features|Listed by:|Source:)/i);
     const payload = {
       pageUrl: location.href,
@@ -721,6 +861,21 @@ export function createBrowserCaptureBookmarklet() {
       sourceSite,
       addressFull,
       listingRemarks: compact(special && special[1] ? special[1] : ""),
+      askingPrice,
+      bedrooms,
+      bathrooms,
+      livingSqft,
+      lotAcres,
+      yearBuilt,
+      annualPropertyTax,
+      hoaPresent,
+      hoaFee,
+      houseStyle,
+      garageSpaces,
+      heatingType,
+      waterSource,
+      sewerType,
+      structuredFactEvidence,
       photoDetails,
       photoUrls
     };
@@ -948,6 +1103,17 @@ function applyCaptureToProperty(
     bedrooms: property.bedrooms ?? capture.bedrooms ?? null,
     bathrooms: property.bathrooms ?? capture.bathrooms ?? null,
     livingSqft: property.livingSqft ?? capture.livingSqft ?? null,
+    lotAcres: property.lotAcres ?? capture.lotAcres ?? null,
+    yearBuilt: property.yearBuilt ?? capture.yearBuilt ?? null,
+    annualPropertyTax:
+      property.annualPropertyTax ?? capture.annualPropertyTax ?? null,
+    hoaPresent: property.hoaPresent ?? capture.hoaPresent ?? null,
+    hoaFee: property.hoaFee ?? capture.hoaFee ?? null,
+    houseStyle: property.houseStyle || capture.houseStyle || "",
+    garageSpaces: property.garageSpaces ?? capture.garageSpaces ?? null,
+    heatingType: property.heatingType || capture.heatingType || "",
+    waterSource: property.waterSource || capture.waterSource || "",
+    sewerType: property.sewerType || capture.sewerType || "",
     listingRemarks: property.listingRemarks || capture.listingRemarks,
     primaryPhotoUrl,
     photoUrls,

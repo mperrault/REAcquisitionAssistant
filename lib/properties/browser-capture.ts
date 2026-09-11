@@ -18,6 +18,28 @@ export const browserCapturePayloadSchema = z
     bedrooms: nullableNumberSchema,
     bathrooms: nullableNumberSchema,
     livingSqft: nullableIntegerSchema,
+    lotAcres: nullableNumberSchema,
+    yearBuilt: nullableIntegerSchema,
+    annualPropertyTax: nullableIntegerSchema,
+    hoaPresent: z.boolean().nullable().optional(),
+    hoaFee: nullableIntegerSchema,
+    houseStyle: z.string().optional().default(""),
+    garageSpaces: nullableIntegerSchema,
+    heatingType: z.string().optional().default(""),
+    waterSource: z.string().optional().default(""),
+    sewerType: z.string().optional().default(""),
+    structuredFactEvidence: z
+      .array(
+        z.object({
+          factKey: z.string().min(1),
+          label: z.string().min(1),
+          value: z.union([z.boolean(), z.number(), z.string(), z.null()]),
+          rawText: z.string(),
+          source: z.enum(["listing_field", "embedded_json", "json_ld", "page_text"])
+        })
+      )
+      .optional()
+      .default([]),
     photoDetails: z
       .array(
         z.object({
