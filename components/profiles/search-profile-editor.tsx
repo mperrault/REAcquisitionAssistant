@@ -37,7 +37,6 @@ import {
 import type {
   CategoryWeight,
   FeaturePreference,
-  PreferenceMode,
   ProfileCategory,
   ProfileState,
   ScoreThreshold,
@@ -46,31 +45,48 @@ import type {
 } from "@/lib/profiles/types";
 import { cn } from "@/lib/utils";
 
-type TabId = "overview" | "geography" | "budget" | "preferences" | "weights";
+type TabId =
+  | "overview"
+  | "geography"
+  | "budget"
+  | "priorities"
+  | "deal_breakers"
+  | "score_bands";
 
 const tabs: Array<{ id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "overview", label: "Overview", icon: Home },
   { id: "geography", label: "Geography", icon: MapPin },
   { id: "budget", label: "Budget", icon: DollarSign },
-  { id: "preferences", label: "Preferences", icon: ShieldAlert },
-  { id: "weights", label: "Weights", icon: SlidersHorizontal }
+  { id: "priorities", label: "Scoring Priorities", icon: SlidersHorizontal },
+  { id: "deal_breakers", label: "Deal Breakers", icon: ShieldAlert },
+  { id: "score_bands", label: "Score Bands", icon: SlidersHorizontal }
 ];
 
 const featureGroups: Array<{ category: ProfileCategory; label: string }> = [
-  { category: "setting", label: "Setting Preferences" },
+  { category: "setting", label: "Setting & Views" },
   { category: "style", label: "House Style" },
+  { category: "financial", label: "Financial Value" },
+  { category: "resale", label: "Resale Signals" },
   { category: "renovation", label: "Renovation Fit" },
-  { category: "risk", label: "Risks And Deal Breakers" },
-  { category: "utility", label: "Utilities And Neutral Facts" },
+  { category: "utility", label: "Systems & Utilities" },
   { category: "maintenance", label: "Maintenance Burden" },
-  { category: "location", label: "Location Rules" }
+  { category: "location", label: "Location Signals" },
+  { category: "risk", label: "Risk Penalties" }
 ];
 
-const preferenceModes: Array<{ value: PreferenceMode; label: string }> = [
-  { value: "bonus", label: "Bonus" },
+type PreferenceImpact =
+  | "strong_bonus"
+  | "bonus"
+  | "small_bonus"
+  | "penalty"
+  | "ignore";
+
+const preferenceImpacts: Array<{ value: PreferenceImpact; label: string }> = [
+  { value: "strong_bonus", label: "Strong reward" },
+  { value: "bonus", label: "Reward" },
+  { value: "small_bonus", label: "Small reward" },
   { value: "penalty", label: "Penalty" },
-  { value: "hard_reject", label: "Hard Reject" },
-  { value: "neutral", label: "Neutral" }
+  { value: "ignore", label: "Ignore" }
 ];
 
 const profileCategories: Array<{ value: ProfileCategory; label: string }> = [
@@ -84,6 +100,20 @@ const profileCategories: Array<{ value: ProfileCategory; label: string }> = [
   { value: "risk", label: "Risk" },
   { value: "utility", label: "Utility" }
 ];
+
+const categoryHelp: Record<ProfileCategory, string> = {
+  location: "Town fit and commute distance.",
+  setting: "Water, views, privacy, acreage, and scarce setting.",
+  style: "House character and architectural fit.",
+  renovation: "Condition burden and expected renovation cost.",
+  financial: "Budget fit and price per square foot.",
+  resale: "Comparable-sales support and exit spread.",
+  maintenance: "Ownership burden items such as garage or upkeep issues.",
+  risk: "Nuisances, insurance risk, and deal-risk facts.",
+  utility: "Heating, water, sewer, driveway, and utility systems."
+};
+
+const maxScoreWeightTotal = 100;
 
 function parseInteger(value: string, fallback = 0) {
   const parsed = Number.parseInt(value, 10);
@@ -114,6 +144,131 @@ function formatCurrency(value: number | null) {
     currency: "USD",
     maximumFractionDigits: 0
   }).format(value);
+}
+
+function getPreferenceImpact(preference: FeaturePreference): PreferenceImpact {
+  if (!preference.enabled || preference.mode === "neutral") {
+    return "ignore";
+  }
+
+  if (preference.mode === "penalty") {
+    return "penalty";
+  }
+
+  if (preference.weight >= 10) {
+    return "strong_bonus";
+  }
+
+  if (preference.weight >= 4) {
+    return "bonus";
+  }
+
+  return "small_bonus";
+}
+
+function patchForPreferenceImpact(
+  impact: PreferenceImpact
+): Partial<FeaturePreference> {
+  if (impact === "strong_bonus") {
+    return { enabled: true, mode: "bonus", weight: 12 };
+  }
+
+  if (impact === "bonus") {
+    return { enabled: true, mode: "bonus", weight: 6 };
+  }
+
+  if (impact === "small_bonus") {
+    return { enabled: true, mode: "bonus", weight: 2 };
+  }
+
+  if (impact === "penalty") {
+    return { enabled: true, mode: "penalty", weight: -6 };
+  }
+
+  return { enabled: false, mode: "neutral", weight: 0 };
+}
+
+function formatCategoryShare(weight: CategoryWeight, totalWeight: number) {
+  if (!weight.enabled || weight.weight <= 0 || totalWeight <= 0) {
+    return "Off";
+  }
+
+  return `${Math.round((weight.weight / totalWeight) * 100)}%`;
+}
+
+function getAssignedCategoryWeight(categoryWeights: CategoryWeight[]) {
+  return categoryWeights.reduce(
+    (total, weight) => total + (weight.enabled ? weight.weight : 0),
+    0
+  );
+}
+
+function getCategoryWeightLimit(
+  categoryWeights: CategoryWeight[],
+  categoryWeight: CategoryWeight
+) {
+  const otherAssignedWeight = categoryWeights.reduce(
+    (total, weight) =>
+      weight.id === categoryWeight.id || !weight.enabled
+        ? total
+        : total + weight.weight,
+    0
+  );
+
+  return Math.max(0, maxScoreWeightTotal - otherAssignedWeight);
+}
+
+function normalizeCategoryWeights(categoryWeights: CategoryWeight[]) {
+  const activeWeights = categoryWeights.filter(
+    (weight) => weight.enabled && weight.weight > 0
+  );
+  const activeTotal = getAssignedCategoryWeight(activeWeights);
+
+  if (activeTotal <= 0) {
+    return categoryWeights;
+  }
+
+  const normalizedRows = activeWeights.map((weight) => {
+    const exactWeight = (weight.weight / activeTotal) * maxScoreWeightTotal;
+
+    return {
+      id: weight.id,
+      baseWeight: Math.floor(exactWeight),
+      remainder: exactWeight - Math.floor(exactWeight)
+    };
+  });
+  let remainingPoints =
+    maxScoreWeightTotal -
+    normalizedRows.reduce((total, row) => total + row.baseWeight, 0);
+  const extrasById = new Map<string, number>();
+
+  normalizedRows
+    .slice()
+    .sort((a, b) => b.remainder - a.remainder)
+    .forEach((row) => {
+      const extra = remainingPoints > 0 ? 1 : 0;
+      extrasById.set(row.id, extra);
+      remainingPoints -= extra;
+    });
+
+  const baseWeightsById = new Map(
+    normalizedRows.map((row) => [row.id, row.baseWeight])
+  );
+
+  return categoryWeights.map((weight) => {
+    if (!baseWeightsById.has(weight.id)) {
+      return { ...weight, weight: 0, enabled: false };
+    }
+
+    const nextWeight =
+      (baseWeightsById.get(weight.id) ?? 0) + (extrasById.get(weight.id) ?? 0);
+
+    return {
+      ...weight,
+      weight: nextWeight,
+      enabled: nextWeight > 0
+    };
+  });
 }
 
 function profileFingerprint(profile: SearchProfile | null) {
@@ -362,6 +517,29 @@ export function SearchProfileEditor() {
     });
   }
 
+  function handleAddDealBreaker() {
+    if (!draft) {
+      return;
+    }
+
+    replaceDraft({
+      ...draft,
+      featurePreferences: [
+        ...draft.featurePreferences,
+        {
+          id: `feature-deal-breaker-${Date.now()}`,
+          featureKey: `risk.custom_${Date.now()}`,
+          featureLabel: "New Deal Breaker",
+          category: "risk",
+          rank: null,
+          weight: -100,
+          mode: "hard_reject",
+          enabled: true
+        }
+      ]
+    });
+  }
+
   function handleAddThreshold() {
     if (!draft) {
       return;
@@ -587,17 +765,25 @@ export function SearchProfileEditor() {
                 {activeTab === "budget" ? (
                   <BudgetTab draft={draft} updateDraft={updateDraft} />
                 ) : null}
-                {activeTab === "preferences" ? (
-                  <PreferencesTab
+                {activeTab === "priorities" ? (
+                  <ScoringPrioritiesTab
                     draft={draft}
+                    updateDraft={updateDraft}
+                    updateCategoryWeight={updateCategoryWeight}
                     updateFeaturePreference={updateFeaturePreference}
                     addFeature={handleAddFeature}
                   />
                 ) : null}
-                {activeTab === "weights" ? (
-                  <WeightsTab
+                {activeTab === "deal_breakers" ? (
+                  <DealBreakersTab
                     draft={draft}
-                    updateCategoryWeight={updateCategoryWeight}
+                    updateFeaturePreference={updateFeaturePreference}
+                    addDealBreaker={handleAddDealBreaker}
+                  />
+                ) : null}
+                {activeTab === "score_bands" ? (
+                  <ScoreBandsTab
+                    draft={draft}
                     updateScoreThreshold={updateScoreThreshold}
                     addThreshold={handleAddThreshold}
                   />
@@ -1044,58 +1230,441 @@ function MoneyField({
   );
 }
 
-function PreferencesTab({
+function ScoringPrioritiesTab({
   draft,
+  updateDraft,
+  updateCategoryWeight,
   updateFeaturePreference,
   addFeature
 }: {
   draft: SearchProfile;
+  updateDraft: (patch: Partial<SearchProfile>) => void;
+  updateCategoryWeight: (id: string, patch: Partial<CategoryWeight>) => void;
   updateFeaturePreference: (id: string, patch: Partial<FeaturePreference>) => void;
   addFeature: (category: ProfileCategory) => void;
 }) {
+  const totalWeight = getAssignedCategoryWeight(draft.categoryWeights);
+  const unassignedWeight = Math.max(0, maxScoreWeightTotal - totalWeight);
+  const totalWeightStatus =
+    totalWeight === maxScoreWeightTotal
+      ? "Fully assigned"
+      : `${unassignedWeight} unassigned`;
+  const enabledCategoryCount = draft.categoryWeights.filter(
+    (weight) => weight.enabled && weight.weight > 0
+  ).length;
+
+  function updateCategoryWeightValue(weight: CategoryWeight, requested: number) {
+    const limit = getCategoryWeightLimit(draft.categoryWeights, weight);
+    const nextWeight = Math.min(Math.max(0, requested), limit);
+
+    updateCategoryWeight(weight.id, {
+      weight: nextWeight,
+      enabled: nextWeight > 0
+    });
+  }
+
+  function updateCategoryWeightEnabled(
+    weight: CategoryWeight,
+    enabled: boolean
+  ) {
+    if (!enabled) {
+      updateCategoryWeight(weight.id, { enabled: false, weight: 0 });
+      return;
+    }
+
+    const limit = getCategoryWeightLimit(draft.categoryWeights, weight);
+
+    if (limit <= 0) {
+      return;
+    }
+
+    updateCategoryWeight(weight.id, {
+      enabled: true,
+      weight: Math.min(Math.max(1, weight.weight), limit)
+    });
+  }
+
   return (
     <div className="grid gap-5">
+      <Section
+        title="Score Allocation"
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge
+              variant={
+                totalWeight === maxScoreWeightTotal ? "success" : "warning"
+              }
+            >
+              {totalWeight} / {maxScoreWeightTotal} assigned
+            </Badge>
+            <Badge variant="outline">{totalWeightStatus}</Badge>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                updateDraft({
+                  categoryWeights: normalizeCategoryWeights(
+                    draft.categoryWeights
+                  )
+                })
+              }
+              disabled={totalWeight <= 0 || totalWeight === maxScoreWeightTotal}
+            >
+              <RotateCcw aria-hidden="true" />
+              Normalize
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Metric
+            label="Assigned"
+            value={`${totalWeight} / ${maxScoreWeightTotal}`}
+          />
+          <Metric label="Remaining" value={unassignedWeight.toString()} />
+          <Metric
+            label="Enabled Categories"
+            value={enabledCategoryCount.toString()}
+          />
+        </div>
+      </Section>
+
       {featureGroups.map((group) => {
+        const categoryWeight = draft.categoryWeights.find(
+          (weight) => weight.categoryKey === group.category
+        );
         const preferences = draft.featurePreferences
-          .filter((preference) => preference.category === group.category)
+          .filter(
+            (preference) =>
+              preference.category === group.category &&
+              preference.mode !== "hard_reject"
+          )
           .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
 
-        if (preferences.length === 0 && group.category === "financial") {
+        if (!categoryWeight && preferences.length === 0) {
           return null;
         }
+
+        const rowLimit = categoryWeight
+          ? getCategoryWeightLimit(draft.categoryWeights, categoryWeight)
+          : 0;
+        const rowValue =
+          categoryWeight && categoryWeight.enabled ? categoryWeight.weight : 0;
+        const canEnable =
+          Boolean(categoryWeight?.enabled) || rowLimit > 0;
 
         return (
           <Section
             key={group.category}
             title={group.label}
             action={
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => addFeature(group.category)}
-              >
-                <Plus aria-hidden="true" />
-                Add Rule
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {categoryWeight ? (
+                  <>
+                    <Badge
+                      variant={categoryWeight.enabled ? "secondary" : "outline"}
+                    >
+                      {rowValue} pts
+                    </Badge>
+                    <Badge variant="outline">
+                      {formatCategoryShare(categoryWeight, totalWeight)}
+                    </Badge>
+                  </>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => addFeature(group.category)}
+                >
+                  <Plus aria-hidden="true" />
+                  Add Rule
+                </Button>
+              </div>
             }
           >
             <div className="grid gap-3">
+              {categoryWeight ? (
+                <div className="grid gap-3 rounded-md border border-border bg-card p-3">
+                  <div className="grid gap-3 lg:grid-cols-[minmax(190px,1fr)_minmax(220px,2fr)_120px_90px] lg:items-center">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium">
+                        Category Importance
+                      </div>
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        {categoryHelp[categoryWeight.categoryKey]}
+                      </div>
+                    </div>
+                    <Field label="Max Points">
+                      <input
+                        type="range"
+                        min={0}
+                        max={rowLimit}
+                        value={rowValue}
+                        onChange={(event) =>
+                          updateCategoryWeightValue(
+                            categoryWeight,
+                            parseInteger(event.target.value)
+                          )
+                        }
+                        className="h-10 w-full accent-primary"
+                        disabled={rowLimit <= 0}
+                      />
+                    </Field>
+                    <Field label="Points">
+                      <Input
+                        type="number"
+                        min={0}
+                        max={rowLimit}
+                        value={rowValue}
+                        onChange={(event) =>
+                          updateCategoryWeightValue(
+                            categoryWeight,
+                            parseInteger(event.target.value)
+                          )
+                        }
+                        disabled={rowLimit <= 0}
+                      />
+                    </Field>
+                    <div className="flex items-center gap-2 lg:justify-end">
+                      <Badge
+                        variant={categoryWeight.enabled ? "secondary" : "outline"}
+                      >
+                        {formatCategoryShare(categoryWeight, totalWeight)}
+                      </Badge>
+                      <Switch
+                        checked={categoryWeight.enabled}
+                        onCheckedChange={(enabled) =>
+                          updateCategoryWeightEnabled(categoryWeight, enabled)
+                        }
+                        disabled={!canEnable}
+                      />
+                    </div>
+                  </div>
+                  <details className="rounded-md border border-border bg-background p-3">
+                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                      Advanced category fields
+                    </summary>
+                    <div className="mt-3 grid gap-3 md:grid-cols-[minmax(180px,1fr)_160px]">
+                      <Field label="Category Label">
+                        <Input
+                          value={categoryWeight.categoryLabel}
+                          onChange={(event) =>
+                            updateCategoryWeight(categoryWeight.id, {
+                              categoryLabel: event.target.value
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="Category">
+                        <Select
+                          value={categoryWeight.categoryKey}
+                          onChange={(event) =>
+                            updateCategoryWeight(categoryWeight.id, {
+                              categoryKey: event.target.value as ProfileCategory
+                            })
+                          }
+                        >
+                          {profileCategories.map((category) => (
+                            <option key={category.value} value={category.value}>
+                              {category.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    </div>
+                  </details>
+                </div>
+              ) : null}
+
+              {preferences.length === 0 ? (
+                <div className="rounded-md border border-dashed border-border bg-card p-5 text-sm text-muted-foreground">
+                  No specific scoring preferences configured.
+                </div>
+              ) : null}
+
               {preferences.map((preference) => (
                 <div
                   key={preference.id}
-                  className="grid gap-3 rounded-md border border-border bg-card p-3 xl:grid-cols-[minmax(170px,1fr)_minmax(180px,1.2fr)_130px_90px_100px_80px]"
+                  className="grid gap-3 rounded-md border border-border bg-card p-3"
                 >
-                  <Field label="Label">
-                    <Input
-                      value={preference.featureLabel}
-                      onChange={(event) =>
-                        updateFeaturePreference(preference.id, {
-                          featureLabel: event.target.value
-                        })
+                  <div className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_180px]">
+                    <Field label="Preference">
+                      <Input
+                        value={preference.featureLabel}
+                        onChange={(event) =>
+                          updateFeaturePreference(preference.id, {
+                            featureLabel: event.target.value
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="Impact">
+                      <Select
+                        value={getPreferenceImpact(preference)}
+                        onChange={(event) =>
+                          updateFeaturePreference(
+                            preference.id,
+                            patchForPreferenceImpact(
+                              event.target.value as PreferenceImpact
+                            )
+                          )
+                        }
+                      >
+                        {preferenceImpacts.map((impact) => (
+                          <option key={impact.value} value={impact.value}>
+                            {impact.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </div>
+
+                  <details className="rounded-md border border-border bg-background p-3">
+                    <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                      Advanced scoring fields
+                    </summary>
+                    <div className="mt-3 grid gap-3 md:grid-cols-[minmax(180px,1fr)_150px_100px_110px_90px]">
+                      <Field label="Fact Key">
+                        <Input
+                          value={preference.featureKey}
+                          onChange={(event) =>
+                            updateFeaturePreference(preference.id, {
+                              featureKey: event.target.value
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="Category">
+                        <Select
+                          value={preference.category}
+                          onChange={(event) =>
+                            updateFeaturePreference(preference.id, {
+                              category: event.target.value as ProfileCategory
+                            })
+                          }
+                        >
+                          {profileCategories.map((category) => (
+                            <option key={category.value} value={category.value}>
+                              {category.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                      <Field label="Rank">
+                        <Input
+                          type="number"
+                          min={1}
+                          value={preference.rank ?? ""}
+                          onChange={(event) =>
+                            updateFeaturePreference(preference.id, {
+                              rank: parseNullableInteger(event.target.value)
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="Points">
+                        <Input
+                          type="number"
+                          value={preference.weight}
+                          onChange={(event) =>
+                            updateFeaturePreference(preference.id, {
+                              weight: parseInteger(event.target.value)
+                            })
+                          }
+                        />
+                      </Field>
+                      <Field label="Enabled">
+                        <div className="flex h-10 items-center">
+                          <Switch
+                            checked={preference.enabled}
+                            onCheckedChange={(enabled) =>
+                              updateFeaturePreference(preference.id, {
+                                enabled
+                              })
+                            }
+                          />
+                        </div>
+                      </Field>
+                    </div>
+                  </details>
+                </div>
+              ))}
+            </div>
+          </Section>
+        );
+      })}
+    </div>
+  );
+}
+
+function DealBreakersTab({
+  draft,
+  updateFeaturePreference,
+  addDealBreaker
+}: {
+  draft: SearchProfile;
+  updateFeaturePreference: (id: string, patch: Partial<FeaturePreference>) => void;
+  addDealBreaker: () => void;
+}) {
+  const dealBreakers = draft.featurePreferences
+    .filter((preference) => preference.mode === "hard_reject")
+    .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+
+  return (
+    <div className="grid gap-5">
+      <Section
+        title="Deal Breakers"
+        action={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={addDealBreaker}
+          >
+            <Plus aria-hidden="true" />
+            Add Deal Breaker
+          </Button>
+        }
+      >
+        <div className="grid gap-3">
+          {dealBreakers.map((preference) => (
+            <div
+              key={preference.id}
+              className="grid gap-3 rounded-md border border-border bg-card p-3"
+            >
+              <div className="grid gap-3 md:grid-cols-[minmax(180px,1fr)_180px]">
+                <Field label="Deal Breaker">
+                  <Input
+                    value={preference.featureLabel}
+                    onChange={(event) =>
+                      updateFeaturePreference(preference.id, {
+                        featureLabel: event.target.value
+                      })
+                    }
+                  />
+                </Field>
+                <Field label="Reject If Present">
+                  <div className="flex h-10 items-center gap-3">
+                    <Switch
+                      checked={preference.enabled}
+                      onCheckedChange={(enabled) =>
+                        updateFeaturePreference(preference.id, { enabled })
                       }
                     />
-                  </Field>
+                    <Badge variant={preference.enabled ? "destructive" : "outline"}>
+                      {preference.enabled ? "Rejects" : "Ignored"}
+                    </Badge>
+                  </div>
+                </Field>
+              </div>
+
+              <details className="rounded-md border border-border bg-background p-3">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+                  Advanced scoring fields
+                </summary>
+                <div className="mt-3 grid gap-3 md:grid-cols-[minmax(180px,1fr)_150px_110px]">
                   <Field label="Fact Key">
                     <Input
                       value={preference.featureKey}
@@ -1106,33 +1675,21 @@ function PreferencesTab({
                       }
                     />
                   </Field>
-                  <Field label="Mode">
+                  <Field label="Category">
                     <Select
-                      value={preference.mode}
+                      value={preference.category}
                       onChange={(event) =>
                         updateFeaturePreference(preference.id, {
-                          mode: event.target.value as PreferenceMode
+                          category: event.target.value as ProfileCategory
                         })
                       }
                     >
-                      {preferenceModes.map((mode) => (
-                        <option key={mode.value} value={mode.value}>
-                          {mode.label}
+                      {profileCategories.map((category) => (
+                        <option key={category.value} value={category.value}>
+                          {category.label}
                         </option>
                       ))}
                     </Select>
-                  </Field>
-                  <Field label="Rank">
-                    <Input
-                      type="number"
-                      min={1}
-                      value={preference.rank ?? ""}
-                      onChange={(event) =>
-                        updateFeaturePreference(preference.id, {
-                          rank: parseNullableInteger(event.target.value)
-                        })
-                      }
-                    />
                   </Field>
                   <Field label="Weight">
                     <Input
@@ -1145,105 +1702,33 @@ function PreferencesTab({
                       }
                     />
                   </Field>
-                  <Field label="Enabled">
-                    <div className="flex h-10 items-center">
-                      <Switch
-                        checked={preference.enabled}
-                        onCheckedChange={(enabled) =>
-                          updateFeaturePreference(preference.id, { enabled })
-                        }
-                      />
-                    </div>
-                  </Field>
                 </div>
-              ))}
+              </details>
             </div>
-          </Section>
-        );
-      })}
+          ))}
+        </div>
+      </Section>
     </div>
   );
 }
 
-function WeightsTab({
+function ScoreBandsTab({
   draft,
-  updateCategoryWeight,
   updateScoreThreshold,
   addThreshold
 }: {
   draft: SearchProfile;
-  updateCategoryWeight: (id: string, patch: Partial<CategoryWeight>) => void;
   updateScoreThreshold: (id: string, patch: Partial<ScoreThreshold>) => void;
   addThreshold: () => void;
 }) {
   return (
     <div className="grid gap-5">
-      <Section title="Category Weights">
-        <div className="grid gap-3">
-          {draft.categoryWeights.map((weight) => (
-            <div
-              key={weight.id}
-              className="grid gap-3 rounded-md border border-border bg-card p-3 md:grid-cols-[minmax(180px,1fr)_150px_120px_80px]"
-            >
-              <Field label="Label">
-                <Input
-                  value={weight.categoryLabel}
-                  onChange={(event) =>
-                    updateCategoryWeight(weight.id, {
-                      categoryLabel: event.target.value
-                    })
-                  }
-                />
-              </Field>
-              <Field label="Category">
-                <Select
-                  value={weight.categoryKey}
-                  onChange={(event) =>
-                    updateCategoryWeight(weight.id, {
-                      categoryKey: event.target.value as ProfileCategory
-                    })
-                  }
-                >
-                  {profileCategories.map((category) => (
-                    <option key={category.value} value={category.value}>
-                      {category.label}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-              <Field label="Weight">
-                <Input
-                  type="number"
-                  min={0}
-                  value={weight.weight}
-                  onChange={(event) =>
-                    updateCategoryWeight(weight.id, {
-                      weight: parseInteger(event.target.value)
-                    })
-                  }
-                />
-              </Field>
-              <Field label="Enabled">
-                <div className="flex h-10 items-center">
-                  <Switch
-                    checked={weight.enabled}
-                    onCheckedChange={(enabled) =>
-                      updateCategoryWeight(weight.id, { enabled })
-                    }
-                  />
-                </div>
-              </Field>
-            </div>
-          ))}
-        </div>
-      </Section>
-
       <Section
-        title="Score Labels"
+        title="Score Bands"
         action={
           <Button type="button" variant="outline" size="sm" onClick={addThreshold}>
             <Plus aria-hidden="true" />
-            Add Label
+            Add Band
           </Button>
         }
       >

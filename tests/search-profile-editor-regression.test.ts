@@ -26,6 +26,25 @@ describe("scoring settings editor regression guards", () => {
     expect(editorSource).toContain("Setup Name");
   });
 
+  it("combines scoring weights and preferences in user-facing language", () => {
+    const source = readProfileEditorSource();
+
+    expect(source).toContain("Scoring Priorities");
+    expect(source).toContain("Score Allocation");
+    expect(source).toContain("Deal Breakers");
+    expect(source).toContain("Reject If Present");
+    expect(source).toContain("Financial Value");
+    expect(source).toContain("Resale Signals");
+    expect(source).toContain("Systems & Utilities");
+    expect(source).toContain("Strong reward");
+    expect(source).toContain("Advanced scoring fields");
+    expect(source).toContain("Category Importance");
+    expect(source).toContain("assigned");
+    expect(source).toContain("Normalize");
+    expect(source).toContain("maxScoreWeightTotal = 100");
+    expect(source).toContain("Score Bands");
+  });
+
   it("de-emphasizes multiple setup controls when there is only one configuration", () => {
     const source = readProfileEditorSource();
 
