@@ -5978,6 +5978,16 @@ function ScoringTab({
       ),
     [activeProfile]
   );
+  const categoryLabels = React.useMemo(
+    () =>
+      Object.fromEntries(
+        activeProfile?.categoryWeights.map((weight) => [
+          weight.categoryKey,
+          weight.categoryLabel
+        ]) ?? []
+      ),
+    [activeProfile]
+  );
 
   return (
     <div className="grid gap-5">
@@ -5991,6 +6001,7 @@ function ScoringTab({
           <ScoreEvaluationPanel
             evaluation={evaluation}
             categoryMaxScores={categoryMaxScores}
+            categoryLabels={categoryLabels}
             isPreview={isDraftEvaluation}
           />
         ) : (

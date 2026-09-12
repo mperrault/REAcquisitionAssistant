@@ -2,9 +2,7 @@ import type React from "react";
 import {
   AlertTriangle,
   CheckCircle2,
-  HelpCircle,
-  MinusCircle,
-  PlusCircle
+  HelpCircle
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +14,31 @@ import type {
 
 type BadgeVariant = React.ComponentProps<typeof Badge>["variant"];
 type ScoreCategory = RuleResult["category"];
+type CategoryLabels = Partial<Record<ScoreCategory, string>>;
+
+const categoryDisplayLabels: Record<ScoreCategory, string> = {
+  location: "Location Signals",
+  setting: "Setting & Views",
+  style: "House Style",
+  renovation: "Renovation Fit",
+  financial: "Financial Value",
+  resale: "Resale Signals",
+  maintenance: "Maintenance Burden",
+  risk: "Risk Penalties",
+  utility: "Systems & Utilities"
+};
+
+const categoryDisplayOrder: ScoreCategory[] = [
+  "location",
+  "setting",
+  "style",
+  "renovation",
+  "financial",
+  "resale",
+  "maintenance",
+  "risk",
+  "utility"
+];
 
 function formatPoints(points: number) {
   if (points > 0) {
@@ -33,8 +56,11 @@ function formatRulePoints(item: RuleResult) {
   return formatPoints(item.points);
 }
 
-function formatCategoryLabel(category: string) {
-  return category.charAt(0).toUpperCase() + category.slice(1);
+function formatCategoryLabel(
+  category: ScoreCategory,
+  categoryLabels?: CategoryLabels
+) {
+  return categoryLabels?.[category] ?? categoryDisplayLabels[category];
 }
 
 function getRuleResultVariant(item: RuleResult): BadgeVariant {
@@ -73,17 +99,15 @@ function getScoreBadgeVariant(badge: ScoreBadge): BadgeVariant {
   return "outline";
 }
 
-function formatScoreGapCount(count: number) {
-  return `${count} ${count === 1 ? "score gap" : "score gaps"}`;
-}
-
 export function ScoreEvaluationPanel({
   evaluation,
   categoryMaxScores,
+  categoryLabels,
   isPreview = false
 }: {
   evaluation: ScoreEvaluation;
   categoryMaxScores?: Partial<Record<ScoreCategory, number>>;
+  categoryLabels?: CategoryLabels;
   isPreview?: boolean;
 }) {
   return (
@@ -164,11 +188,13 @@ export function ScoreEvaluationPanel({
       <CategoryScores
         evaluation={evaluation}
         categoryMaxScores={categoryMaxScores}
+        categoryLabels={categoryLabels}
       />
 
       <ScoreDrivers
         evaluation={evaluation}
         categoryMaxScores={categoryMaxScores}
+        categoryLabels={categoryLabels}
       />
 
       <ScoreImprovementSection evaluation={evaluation} />
@@ -179,22 +205,6 @@ export function ScoreEvaluationPanel({
         items={evaluation.hardRejectReasons}
         emptyText="No hard-reject rules matched."
       />
-
-      <ResultSection
-        title="Positive Factors"
-        icon={PlusCircle}
-        items={evaluation.positiveFactors}
-        emptyText="No positive scoring factors matched."
-      />
-
-      <ResultSection
-        title="Penalties"
-        icon={MinusCircle}
-        items={evaluation.penalties}
-        emptyText="No scoring penalties matched."
-      />
-
-      <ScoreGapsSection items={evaluation.missingData} />
     </div>
   );
 }
@@ -317,45 +327,56 @@ function ScoreMetric({
 
 function CategoryScores({
   evaluation,
-  categoryMaxScores
+  categoryMaxScores,
+  categoryLabels
 }: {
   evaluation: ScoreEvaluation;
   categoryMaxScores?: Partial<Record<ScoreCategory, number>>;
+  categoryLabels?: CategoryLabels;
 }) {
+  const groups = getCategoryDriverGroups(evaluation, categoryMaxScores);
+
   return (
     <div className="rounded-md border border-border bg-background">
       <div className="border-b border-border p-4 text-sm font-semibold">
-        Category Scores
+        Scoring Priorities
       </div>
       <div className="grid gap-2 p-4 sm:grid-cols-2 lg:grid-cols-3">
-        {(
-          Object.entries(evaluation.categoryScores) as Array<
-            [ScoreCategory, number]
-          >
-        ).map(([category, points]) => {
-          const maxPoints = categoryMaxScores?.[category] ?? null;
+        {groups.map((group) => {
+          const missedPoints =
+            group.maxPoints !== null
+              ? Math.max(0, group.maxPoints - group.earned)
+              : null;
 
           return (
             <div
-              key={category}
+              key={group.category}
               className="grid gap-2 rounded-md border border-border bg-card px-3 py-2"
             >
               <div className="flex items-center justify-between gap-3">
                 <span className="truncate text-sm text-muted-foreground">
-                  {formatCategoryLabel(category)}
+                  {formatCategoryLabel(group.category, categoryLabels)}
                 </span>
                 <span className="shrink-0 text-sm font-semibold">
-                  {formatPoints(points)}
-                  {maxPoints !== null ? (
+                  {formatPoints(group.earned)}
+                  {group.maxPoints !== null ? (
                     <span className="font-medium text-muted-foreground">
                       {" "}
-                      / {maxPoints}
+                      / {group.maxPoints}
                     </span>
                   ) : null}
                 </span>
               </div>
+              {missedPoints !== null ? (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <Badge variant={missedPoints > 0 ? "warning" : "success"}>
+                    {missedPoints} missed
+                  </Badge>
+                  <span>{group.maxPoints} max points</span>
+                </div>
+              ) : null}
               <div className="text-xs text-muted-foreground">
-                {getCategoryScoreDetail(evaluation, category, points)}
+                {getCategoryScoreDetail(evaluation, group.category, group.earned, categoryLabels)}
               </div>
             </div>
           );
@@ -367,17 +388,19 @@ function CategoryScores({
 
 function ScoreDrivers({
   evaluation,
-  categoryMaxScores
+  categoryMaxScores,
+  categoryLabels
 }: {
   evaluation: ScoreEvaluation;
   categoryMaxScores?: Partial<Record<ScoreCategory, number>>;
+  categoryLabels?: CategoryLabels;
 }) {
   const groups = getCategoryDriverGroups(evaluation, categoryMaxScores);
 
   return (
     <div className="rounded-md border border-border bg-background">
       <div className="border-b border-border p-4 text-sm font-semibold">
-        Score Drivers
+        Scoring Priority Details
       </div>
       <div className="grid gap-3 p-4">
         {groups.map((group) => (
@@ -387,7 +410,7 @@ function ScoreDrivers({
           >
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-sm font-semibold">
-                {formatCategoryLabel(group.category)}
+                {formatCategoryLabel(group.category, categoryLabels)}
               </div>
               <Badge variant={group.earned > 0 ? "success" : "outline"}>
                 {formatPoints(group.earned)}
@@ -532,27 +555,52 @@ function getCategoryDriverGroups(
     }
   }
 
-  return [...categories].map((category) => ({
-    category,
-    earned: evaluation.categoryScores[category] ?? 0,
-    maxPoints: categoryMaxScores?.[category] ?? null,
-    positiveFactors: evaluation.positiveFactors.filter(
-      (item) => item.category === category
-    ),
-    penalties: evaluation.penalties.filter((item) => item.category === category),
-    hardRejectReasons: evaluation.hardRejectReasons.filter(
-      (item) => item.category === category
-    ),
-    missingData: evaluation.missingData.filter(
-      (item) => getGapCategory(item) === category
+  return [...categories]
+    .map((category) => {
+      const positiveFactors = evaluation.positiveFactors.filter(
+        (item) => item.category === category
+      );
+      const penalties = evaluation.penalties.filter(
+        (item) => item.category === category
+      );
+      const hardRejectReasons = evaluation.hardRejectReasons.filter(
+        (item) => item.category === category
+      );
+      const missingData = evaluation.missingData.filter(
+        (item) => getGapCategory(item) === category
+      );
+
+      return {
+        category,
+        earned: evaluation.categoryScores[category] ?? 0,
+        maxPoints: categoryMaxScores?.[category] ?? null,
+        positiveFactors,
+        penalties,
+        hardRejectReasons,
+        missingData
+      };
+    })
+    .filter(
+      (group) =>
+        group.maxPoints !== null ||
+        group.earned !== 0 ||
+        group.positiveFactors.length > 0 ||
+        group.penalties.length > 0 ||
+        group.hardRejectReasons.length > 0 ||
+        group.missingData.length > 0
     )
-  }));
+    .sort(
+      (a, b) =>
+        categoryDisplayOrder.indexOf(a.category) -
+        categoryDisplayOrder.indexOf(b.category)
+    );
 }
 
 function getCategoryScoreDetail(
   evaluation: ScoreEvaluation,
-  category: string,
-  points: number
+  category: ScoreCategory,
+  points: number,
+  categoryLabels?: CategoryLabels
 ) {
   const categoryFactors = [
     ...evaluation.positiveFactors,
@@ -576,7 +624,10 @@ function getCategoryScoreDetail(
   }
 
   if (points === 0) {
-    return `No matching ${formatCategoryLabel(category).toLowerCase()} facts scored.`;
+    return `No matching ${formatCategoryLabel(
+      category,
+      categoryLabels
+    ).toLowerCase()} facts scored.`;
   }
 
   return "Score came from derived category rules.";
@@ -668,38 +719,6 @@ function ResultSection({
           ))
         )}
       </div>
-    </div>
-  );
-}
-
-function ScoreGapsSection({
-  items
-}: {
-  items: ScoreEvaluation["missingData"];
-}) {
-  return (
-    <div className="rounded-md border border-border bg-background">
-      <div className="flex items-center gap-2 border-b border-border p-4 text-sm font-semibold">
-        <HelpCircle className="size-4" aria-hidden="true" />
-        Score Gaps
-        {items.length > 0 ? (
-          <Badge variant="warning">{formatScoreGapCount(items.length)}</Badge>
-        ) : null}
-      </div>
-      {items.length > 0 ? (
-        <div className="grid gap-2 p-4">
-          {items.map((item) => (
-            <div key={item} className="text-sm text-muted-foreground">
-              {item}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-          <CheckCircle2 className="size-4 text-primary" aria-hidden="true" />
-          No score gaps recorded.
-        </div>
-      )}
     </div>
   );
 }
