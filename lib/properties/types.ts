@@ -40,6 +40,18 @@ export const propertyFactSourceTypeSchema = z.enum([
 
 export type PropertyFactSourceType = z.infer<typeof propertyFactSourceTypeSchema>;
 
+export const propertyFactEvidencePhotoAnnotationSchema = z.object({
+  url: z.string().min(1),
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  radius: z.number().min(0.01).max(0.5),
+  label: z.string().default("")
+});
+
+export type PropertyFactEvidencePhotoAnnotation = z.infer<
+  typeof propertyFactEvidencePhotoAnnotationSchema
+>;
+
 export const propertyFactSchema = z.object({
   id: z.string().min(1),
   factKey: z.string().min(1),
@@ -48,6 +60,9 @@ export const propertyFactSchema = z.object({
   sourceType: propertyFactSourceTypeSchema,
   sourceReference: z.string(),
   evidencePhotoUrls: z.array(z.string()).default([]),
+  evidencePhotoAnnotations: z
+    .array(propertyFactEvidencePhotoAnnotationSchema)
+    .default([]),
   confidence: z.number().min(0).max(1).nullable(),
   verified: z.boolean(),
   observedAt: z.string().datetime()

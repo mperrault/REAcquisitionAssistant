@@ -94,7 +94,7 @@ function readCoordinate(value: unknown) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-async function geocodeAddress(
+export async function geocodeAddress(
   label: string,
   fetcher: FetchLike
 ): Promise<{ coordinate: Coordinate | null; warning: string | null }> {

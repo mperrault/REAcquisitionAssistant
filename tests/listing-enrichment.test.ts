@@ -32,6 +32,179 @@ function createJsonResponse(payload: unknown, status = 200) {
 }
 
 describe("listing page enrichment", () => {
+  it("looks up coordinates from the property address when missing", async () => {
+    const requestedUrls: string[] = [];
+    const result = await enrichListingCandidate(baseCandidate, async (input) => {
+      requestedUrls.push(input);
+
+      if (input.includes("nominatim.openstreetmap.org/search")) {
+        return createJsonResponse([
+          {
+            lat: "41.987",
+            lon: "-72.31",
+            display_name: "47 High St, Stafford, CT 06076"
+          }
+        ]);
+      }
+
+      if (input.includes("Connecticut_CAMA_and_Parcel_Layer")) {
+        return createJsonResponse({ features: [] });
+      }
+
+      if (input.includes("Named_Waterbody_Set") || input.includes("2011_Protected_Open_Space_Mapping")) {
+        return createJsonResponse({ features: [] });
+      }
+
+      return createFetchResponse(`<html>
+        <head>
+          <script type="application/ld+json">
+            {
+              "@type": "SingleFamilyResidence",
+              "address": "47 High St, Stafford, CT 06076",
+              "offers": { "price": "315000" }
+            }
+          </script>
+        </head>
+        <body>47 High St Stafford CT 06076</body>
+      </html>`);
+    });
+
+    expect(
+      requestedUrls.some((url) => url.includes("nominatim.openstreetmap.org/search"))
+    ).toBe(true);
+    expect(result.updates.latitude).toBe(41.987);
+    expect(result.updates.longitude).toBe(-72.31);
+    expect(
+      result.diagnostics.some(
+        (item) =>
+          item.stage === "geocode" &&
+          item.status === "success" &&
+          item.message === "Property coordinates found."
+      )
+    ).toBe(true);
+  });
+
+  it("adds CT GIS setting facts from nearby water and protected open space", async () => {
+    const requestedUrls: string[] = [];
+    const result = await enrichListingCandidate(
+      {
+        ...baseCandidate,
+        latitude: 41.987,
+        longitude: -72.31,
+        listingRemarks: "Well-kept home near Stafford Springs."
+      },
+      async (input) => {
+        requestedUrls.push(input);
+
+        if (input.includes("Connecticut_CAMA_and_Parcel_Layer")) {
+          return createJsonResponse({
+            features: [
+              {
+                attributes: {
+                  OBJECTID: 7,
+                  Location_1: "47 HIGH ST",
+                  Town_Name: "STAFFORD",
+                  Property_City: "STAFFORD",
+                  Property_Zip: "06076",
+                  Land_Acres: 1.2
+                },
+                geometry: {
+                  rings: [
+                    [
+                      [-72.311, 41.986],
+                      [-72.309, 41.986],
+                      [-72.309, 41.988],
+                      [-72.311, 41.988],
+                      [-72.311, 41.986]
+                    ]
+                  ]
+                }
+              }
+            ]
+          });
+        }
+
+        if (
+          input.includes("Named_Waterbody_Set") &&
+          input.includes("FeatureServer/1/query")
+        ) {
+          return createJsonResponse({
+            features: [
+              {
+                attributes: {
+                  NAMED_POLY: "Staffordville Lake",
+                  LAKE: "Staffordville Lake",
+                  ACREAGE: 152
+                }
+              }
+            ]
+          });
+        }
+
+        if (
+          input.includes("Named_Waterbody_Set") &&
+          input.includes("FeatureServer/0/query")
+        ) {
+          return createJsonResponse({ features: [] });
+        }
+
+        if (input.includes("2011_Protected_Open_Space_Mapping")) {
+          return createJsonResponse({
+            features: [
+              {
+                attributes: {
+                  OFFIC_NAME: "Nipmuck State Forest",
+                  OS_TYPE: "State"
+                }
+              }
+            ]
+          });
+        }
+
+        return createFetchResponse(`<html>
+          <head>
+            <script type="application/ld+json">
+              {
+                "@type": "SingleFamilyResidence",
+                "address": "47 High St, Stafford, CT 06076",
+                "offers": { "price": "315000" }
+              }
+            </script>
+          </head>
+          <body>47 High St Stafford CT 06076</body>
+        </html>`);
+      }
+    );
+
+    expect(
+      requestedUrls.some((url) => url.includes("Connecticut_CAMA_and_Parcel_Layer"))
+    ).toBe(true);
+    expect(result.updates.settingFacts).toEqual([
+      {
+        factKey: "setting.lake_frontage",
+        label: "Lake Frontage",
+        confidence: 0.82,
+        evidence:
+          "Staffordville Lake is mapped within 100 ft by CT ECO Named Waterbody."
+      },
+      {
+        factKey: "setting.woods_privacy",
+        label: "Woods / Privacy",
+        confidence: 0.66,
+        evidence:
+          "Nipmuck State Forest is mapped within 300 ft by CT DEEP Protected Open Space."
+      }
+    ]);
+    expect(
+      result.diagnostics.some(
+        (item) =>
+          item.stage === "setting GIS" &&
+          item.status === "success" &&
+          item.message === "CT GIS matched setting facts."
+      )
+    ).toBe(true);
+  });
+
   it("fills missing price but does not import photos from listing page metadata", async () => {
     const result = await enrichListingCandidate(baseCandidate, async () =>
       createFetchResponse(`<html>

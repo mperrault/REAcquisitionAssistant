@@ -1245,6 +1245,8 @@ function createPropertyEnrichmentCandidate(
     city: property.city,
     state: property.state,
     postalCode: property.postalCode,
+    latitude: property.latitude,
+    longitude: property.longitude,
     askingPrice: property.askingPrice,
     primaryPhotoUrl,
     photoUrls,
@@ -1391,6 +1393,10 @@ function mergeEnrichmentIntoProperty(
     Boolean(enrichment.listingUrl) && enrichment.listingUrl !== property.listingUrl;
   const shouldApplyPrice =
     property.askingPrice === null && enrichment.updates.askingPrice !== null;
+  const shouldApplyCoordinates =
+    (property.latitude === null || property.longitude === null) &&
+    enrichment.updates.latitude !== null &&
+    enrichment.updates.longitude !== null;
   const propertyPhotoUrls = getPropertyPhotoUrls(property);
   const evidencePrimaryPhotoUrl =
     property.primaryPhotoUrl || propertyPhotoUrls[0] || "";
@@ -1562,6 +1568,7 @@ function mergeEnrichmentIntoProperty(
   const changed =
     shouldApplyListingUrl ||
     shouldApplyPrice ||
+    shouldApplyCoordinates ||
     shouldApplyPhoto ||
     shouldApplyStyle ||
     didApplySetting ||
@@ -1576,6 +1583,12 @@ function mergeEnrichmentIntoProperty(
       askingPrice: shouldApplyPrice
         ? enrichment.updates.askingPrice
         : property.askingPrice,
+      latitude: shouldApplyCoordinates
+        ? enrichment.updates.latitude
+        : property.latitude,
+      longitude: shouldApplyCoordinates
+        ? enrichment.updates.longitude
+        : property.longitude,
       primaryPhotoUrl,
       photoUrls,
       photoEvidence,
@@ -1590,6 +1603,7 @@ function mergeEnrichmentIntoProperty(
     appliedFields: [
       shouldApplyListingUrl ? "listing URL" : null,
       shouldApplyPrice ? "price" : null,
+      shouldApplyCoordinates ? "coordinates" : null,
       shouldApplyPhoto ? "photo" : null,
       shouldApplyStyle ? "style" : null,
       repairedPhotoReferences ? "captured photos" : null,
@@ -3452,6 +3466,20 @@ function OverviewTab({
               }
             />
           </Field>
+          <NumberField
+            label="Latitude"
+            value={draft.latitude}
+            step="0.000001"
+            min={undefined}
+            onChange={(latitude) => updateDraft({ latitude })}
+          />
+          <NumberField
+            label="Longitude"
+            value={draft.longitude}
+            step="0.000001"
+            min={undefined}
+            onChange={(longitude) => updateDraft({ longitude })}
+          />
           <Field label="Lifecycle Status">
             <Select
               value={draft.lifecycleStatus}
@@ -3551,20 +3579,6 @@ function OverviewTab({
               }
             />
           </Field>
-          <NumberField
-            label="Latitude"
-            value={draft.latitude}
-            step="0.000001"
-            min={undefined}
-            onChange={(latitude) => updateDraft({ latitude })}
-          />
-          <NumberField
-            label="Longitude"
-            value={draft.longitude}
-            step="0.000001"
-            min={undefined}
-            onChange={(longitude) => updateDraft({ longitude })}
-          />
         </div>
       </Section>
     </div>

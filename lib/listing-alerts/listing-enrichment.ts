@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { geocodeAddress } from "@/lib/commute/drive-time";
 import type { ListingCandidate } from "@/lib/listing-alerts/types";
 import {
   getRealtorListingAddressHint,
@@ -14,6 +15,8 @@ const requestCandidateSchema = z.object({
   city: z.string(),
   state: z.string(),
   postalCode: z.string(),
+  latitude: z.number().nullable().optional(),
+  longitude: z.number().nullable().optional(),
   askingPrice: z.number().int().nonnegative().nullable(),
   primaryPhotoUrl: z.string(),
   photoUrls: z.array(z.string()),
@@ -68,6 +71,8 @@ export const listingCandidateEnrichmentResponseSchema = z.object({
   fetchedAt: z.string().datetime(),
   updates: z.object({
     askingPrice: z.number().int().nonnegative().nullable(),
+    latitude: z.number().nullable(),
+    longitude: z.number().nullable(),
     primaryPhotoUrl: z.string(),
     photoUrls: z.array(z.string()),
     houseStyle: z.string(),
@@ -121,6 +126,14 @@ type SettingInference = Array<z.infer<typeof inferredFactSchema>>;
 
 const noPreferredSettingMatchFactKey = "setting.no_preferred_match";
 const defaultStylePhotoLimit = 3;
+const ctParcelLayerUrl =
+  "https://services3.arcgis.com/3FL1kr7L4LvwA2Kb/arcgis/rest/services/Connecticut_CAMA_and_Parcel_Layer/FeatureServer/0/query";
+const namedWaterbodyLineLayerUrl =
+  "https://services1.arcgis.com/FjPcSmEFuDYlIdKC/ArcGIS/rest/services/Named_Waterbody_Set/FeatureServer/0/query";
+const namedWaterbodyPolyLayerUrl =
+  "https://services1.arcgis.com/FjPcSmEFuDYlIdKC/ArcGIS/rest/services/Named_Waterbody_Set/FeatureServer/1/query";
+const protectedOpenSpaceLayerUrl =
+  "https://services1.arcgis.com/FjPcSmEFuDYlIdKC/ArcGIS/rest/services/2011_Protected_Open_Space_Mapping/FeatureServer/0/query";
 
 function isNoPreferredSettingMatchFact(fact: z.infer<typeof inferredFactSchema>) {
   return fact.factKey === noPreferredSettingMatchFactKey;
@@ -532,6 +545,8 @@ function getSettingUpdate(settingFacts: SettingInference | null) {
 function emptyUpdates() {
   return {
     askingPrice: null,
+    latitude: null,
+    longitude: null,
     primaryPhotoUrl: "",
     photoUrls: [],
     ...getStyleUpdate(null),
@@ -753,6 +768,433 @@ function mergeSettingFacts(
   }
 
   return facts;
+}
+
+type ArcGisFeature = {
+  attributes?: Record<string, unknown>;
+  geometry?: {
+    x?: number;
+    y?: number;
+    rings?: number[][][];
+    paths?: number[][][];
+  };
+};
+
+type ArcGisQueryResponse = {
+  features?: ArcGisFeature[];
+  error?: { message?: string };
+};
+
+function arcGisValue(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function arcGisNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function escapeSqlString(value: string) {
+  return value.replace(/'/g, "''");
+}
+
+function getParcelAddressWhere(candidate: z.infer<typeof requestCandidateSchema>) {
+  const address = normalizeText(candidate.addressLine1)
+    .replace(/\b(road)\b/gi, "rd")
+    .replace(/\b(street)\b/gi, "st")
+    .replace(/\b(avenue)\b/gi, "ave")
+    .toUpperCase();
+  const city = normalizeText(candidate.city).toUpperCase();
+  const postalCode = normalizeText(candidate.postalCode);
+
+  if (!address || !city) {
+    return "1=0";
+  }
+
+  const clauses = [
+    `UPPER(Location_1) LIKE '%${escapeSqlString(address)}%'`,
+    `(UPPER(Town_Name) = '${escapeSqlString(city)}' OR UPPER(Property_City) LIKE '%${escapeSqlString(city)}%')`
+  ];
+
+  if (postalCode) {
+    clauses.push(
+      `(Property_Zip = '${escapeSqlString(postalCode)}' OR ZIP_CODE = '${escapeSqlString(postalCode)}')`
+    );
+  }
+
+  return clauses.join(" AND ");
+}
+
+function formatCandidateAddress(candidate: z.infer<typeof requestCandidateSchema>) {
+  return [
+    candidate.addressLine1,
+    candidate.city,
+    candidate.state,
+    candidate.postalCode
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function getPolygonCentroid(
+  geometry: ArcGisFeature["geometry"]
+): { latitude: number; longitude: number } | null {
+  const points = geometry?.rings?.flat() ?? [];
+
+  if (points.length === 0) {
+    return null;
+  }
+
+  const totals = points.reduce(
+    (accumulator, point) => ({
+      longitude: accumulator.longitude + (point[0] ?? 0),
+      latitude: accumulator.latitude + (point[1] ?? 0)
+    }),
+    { latitude: 0, longitude: 0 }
+  );
+
+  return {
+    latitude: totals.latitude / points.length,
+    longitude: totals.longitude / points.length
+  };
+}
+
+async function readArcGisJson(response: Pick<Response, "json" | "text">) {
+  if ("json" in response && typeof response.json === "function") {
+    return (await response.json()) as ArcGisQueryResponse;
+  }
+
+  return JSON.parse(await response.text()) as ArcGisQueryResponse;
+}
+
+async function queryArcGis(
+  url: string,
+  params: Record<string, string | number | boolean>,
+  fetcher: FetchLike,
+  signal?: AbortSignal
+) {
+  const queryUrl = new URL(url);
+
+  for (const [key, value] of Object.entries({
+    f: "json",
+    ...params
+  })) {
+    queryUrl.searchParams.set(key, String(value));
+  }
+
+  const response = await fetcher(queryUrl.toString(), { signal });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const payload = await readArcGisJson(response as Response);
+
+  if (payload.error?.message) {
+    throw new Error(payload.error.message);
+  }
+
+  return payload.features ?? [];
+}
+
+async function queryCtParcel(
+  candidate: z.infer<typeof requestCandidateSchema>,
+  fetcher: FetchLike,
+  signal?: AbortSignal,
+  coordinateOverride?: { latitude: number; longitude: number } | null
+) {
+  const coordinatePoint =
+    coordinateOverride ??
+    (typeof candidate.latitude === "number" &&
+    typeof candidate.longitude === "number"
+      ? {
+          latitude: candidate.latitude,
+          longitude: candidate.longitude
+        }
+      : null);
+
+  const commonParams = {
+    outFields:
+      "OBJECTID,Location_1,Town_Name,Property_City,Property_Zip,Land_Acres,State_Use_Description",
+    returnGeometry: true,
+    outSR: 4326,
+    resultRecordCount: 1
+  };
+
+  const features = coordinatePoint
+    ? await queryArcGis(
+        ctParcelLayerUrl,
+        {
+          ...commonParams,
+          where: "1=1",
+          geometry: JSON.stringify({
+            x: coordinatePoint.longitude,
+            y: coordinatePoint.latitude,
+            spatialReference: { wkid: 4326 }
+          }),
+          geometryType: "esriGeometryPoint",
+          inSR: 4326,
+          spatialRel: "esriSpatialRelIntersects"
+        },
+        fetcher,
+        signal
+      )
+    : await queryArcGis(
+        ctParcelLayerUrl,
+        {
+          ...commonParams,
+          where: getParcelAddressWhere(candidate)
+        },
+        fetcher,
+        signal
+      );
+
+  const parcel = features[0] ?? null;
+  const centroid =
+    coordinatePoint ?? getPolygonCentroid(parcel?.geometry) ?? null;
+
+  return parcel && centroid
+    ? {
+        feature: parcel,
+        centroid
+      }
+    : null;
+}
+
+function getWaterbodyName(attributes: Record<string, unknown> = {}) {
+  return (
+    arcGisValue(attributes.NAMED_POLY) ||
+    arcGisValue(attributes.LAKE) ||
+    arcGisValue(attributes.STREAM) ||
+    arcGisValue(attributes.NAMED_ARC) ||
+    arcGisValue(attributes.BAY) ||
+    arcGisValue(attributes.HARBOR) ||
+    arcGisValue(attributes.SOUND) ||
+    "mapped waterbody"
+  );
+}
+
+function classifyWaterFact(
+  feature: ArcGisFeature | null,
+  distanceFeet: number,
+  geometryType: "line" | "polygon"
+) {
+  if (!feature) {
+    return null;
+  }
+
+  const name = getWaterbodyName(feature.attributes);
+  const normalized = name.toLowerCase();
+  const isPond = /\bpond\b/.test(normalized);
+  const isRiver =
+    geometryType === "line" || /\b(river|brook|stream|creek)\b/.test(normalized);
+  const isFrontage = distanceFeet <= 100;
+
+  if (isRiver) {
+    return {
+      factKey: "setting.river_frontage",
+      label: "River Frontage",
+      confidence: isFrontage ? 0.78 : 0.68,
+      evidence: `${name} is mapped within ${distanceFeet} ft by CT ECO Named Waterbody.`
+    };
+  }
+
+  if (isPond) {
+    return {
+      factKey: isFrontage ? "setting.pond_frontage" : "setting.pond_view",
+      label: isFrontage ? "Pond Frontage" : "Pond View",
+      confidence: isFrontage ? 0.8 : 0.66,
+      evidence: `${name} is mapped within ${distanceFeet} ft by CT ECO Named Waterbody.`
+    };
+  }
+
+  return {
+    factKey: isFrontage ? "setting.lake_frontage" : "setting.lake_view",
+    label: isFrontage ? "Lake Frontage" : "Lake View",
+    confidence: isFrontage ? 0.82 : 0.68,
+    evidence: `${name} is mapped within ${distanceFeet} ft by CT ECO Named Waterbody.`
+  };
+}
+
+async function queryNearbyFeatures(
+  url: string,
+  centroid: { latitude: number; longitude: number },
+  distanceFeet: number,
+  outFields: string,
+  fetcher: FetchLike,
+  signal?: AbortSignal
+) {
+  return queryArcGis(
+    url,
+    {
+      where: "1=1",
+      outFields,
+      returnGeometry: false,
+      resultRecordCount: 3,
+      geometry: JSON.stringify({
+        x: centroid.longitude,
+        y: centroid.latitude,
+        spatialReference: { wkid: 4326 }
+      }),
+      geometryType: "esriGeometryPoint",
+      inSR: 4326,
+      spatialRel: "esriSpatialRelIntersects",
+      distance: distanceFeet,
+      units: "esriSRUnit_Foot"
+    },
+    fetcher,
+    signal
+  );
+}
+
+function getOpenSpaceFact(feature: ArcGisFeature | null, distanceFeet: number) {
+  if (!feature) {
+    return null;
+  }
+
+  const attributes = feature.attributes ?? {};
+  const name =
+    arcGisValue(attributes.OFFIC_NAME) ||
+    arcGisValue(attributes.NAME) ||
+    arcGisValue(attributes.GRANTEE) ||
+    "protected open space";
+
+  return {
+    factKey: "setting.woods_privacy",
+    label: "Woods / Privacy",
+    confidence: distanceFeet <= 100 ? 0.74 : 0.66,
+    evidence: `${name} is mapped within ${distanceFeet} ft by CT DEEP Protected Open Space.`
+  };
+}
+
+async function inferSettingFactsFromCtGis(
+  candidate: z.infer<typeof requestCandidateSchema>,
+  fetcher: FetchLike,
+  signal: AbortSignal | undefined,
+  addDiagnostic: ReturnType<typeof createDiagnosticRecorder>["add"],
+  coordinateOverride?: { latitude: number; longitude: number } | null
+): Promise<SettingInference> {
+  if (candidate.state.trim().toUpperCase() !== "CT") {
+    addDiagnostic(
+      "setting GIS",
+      "skipped",
+      "CT GIS setting lookup skipped.",
+      "Property state is not CT."
+    );
+    return [];
+  }
+
+  try {
+    addDiagnostic(
+      "setting GIS",
+      "started",
+      "Looking up CT GIS setting data.",
+      "Checking CT parcel, named waterbody, and protected open-space layers."
+    );
+
+    const parcel = await queryCtParcel(
+      candidate,
+      fetcher,
+      signal,
+      coordinateOverride
+    );
+
+    if (!parcel) {
+      addDiagnostic(
+        "setting GIS",
+        "warning",
+        "CT GIS parcel lookup did not find a match.",
+        `${candidate.addressLine1}, ${candidate.city}, ${candidate.state} ${candidate.postalCode}`
+      );
+      return [];
+    }
+
+    const frontageDistanceFeet = 100;
+    const nearbyDistanceFeet = 600;
+    const openSpaceDistanceFeet = 300;
+    const [frontageWaterPolys, frontageWaterLines, nearbyWaterPolys, openSpace] =
+      await Promise.all([
+        queryNearbyFeatures(
+          namedWaterbodyPolyLayerUrl,
+          parcel.centroid,
+          frontageDistanceFeet,
+          "NAMED_POLY,LAKE,STREAM,BAY,HARBOR,SOUND,ACREAGE",
+          fetcher,
+          signal
+        ),
+        queryNearbyFeatures(
+          namedWaterbodyLineLayerUrl,
+          parcel.centroid,
+          frontageDistanceFeet,
+          "NAMED_ARC,STREAM,LAKE,BAY,HARBOR,SOUND",
+          fetcher,
+          signal
+        ),
+        queryNearbyFeatures(
+          namedWaterbodyPolyLayerUrl,
+          parcel.centroid,
+          nearbyDistanceFeet,
+          "NAMED_POLY,LAKE,STREAM,BAY,HARBOR,SOUND,ACREAGE",
+          fetcher,
+          signal
+        ),
+        queryNearbyFeatures(
+          protectedOpenSpaceLayerUrl,
+          parcel.centroid,
+          openSpaceDistanceFeet,
+          "OFFIC_NAME,NAME,GRANTEE,OS_TYPE,ACRES",
+          fetcher,
+          signal
+        )
+      ]);
+
+    const facts = [
+      classifyWaterFact(
+        frontageWaterPolys[0] ?? frontageWaterLines[0] ?? nearbyWaterPolys[0] ?? null,
+        frontageWaterPolys[0] || frontageWaterLines[0]
+          ? frontageDistanceFeet
+          : nearbyDistanceFeet,
+        frontageWaterPolys[0] || nearbyWaterPolys[0] ? "polygon" : "line"
+      ),
+      getOpenSpaceFact(openSpace[0] ?? null, openSpaceDistanceFeet)
+    ].filter(Boolean) as SettingInference;
+
+    const acreage = arcGisNumber(parcel.feature.attributes?.Land_Acres);
+    if (acreage !== null && acreage >= 3 && !facts.some((fact) => fact.factKey === "setting.open_fields_pastoral")) {
+      facts.push({
+        factKey: "setting.open_fields_pastoral",
+        label: "Open Fields / Pastoral",
+        confidence: 0.58,
+        evidence: `CT parcel data reports ${acreage.toFixed(1)} land acres. Review aerial imagery to confirm open-field character.`
+      });
+    }
+
+    if (facts.length === 0) {
+      addDiagnostic(
+        "setting GIS",
+        "info",
+        "CT GIS lookup found no preferred setting facts.",
+        "Parcel was found, but no nearby named waterbody or protected open-space match was detected."
+      );
+      return [];
+    }
+
+    addDiagnostic(
+      "setting GIS",
+      "success",
+      "CT GIS matched setting facts.",
+      facts.map((fact) => `${fact.label}: ${fact.evidence}`).join(" | ")
+    );
+
+    return facts;
+  } catch (error) {
+    addDiagnostic(
+      "setting GIS",
+      "warning",
+      "CT GIS setting lookup failed.",
+      error instanceof Error ? error.message : "Unknown GIS lookup error."
+    );
+    return [];
+  }
 }
 
 function parseStyleLabel(value: unknown) {
@@ -2256,7 +2698,12 @@ export async function enrichListingCandidate(
     Partial<
       Pick<
         z.infer<typeof requestCandidateSchema>,
-        "houseStyle" | "listingRemarks" | "inferStyle" | "inferRenovation"
+        | "houseStyle"
+        | "listingRemarks"
+        | "inferStyle"
+        | "inferRenovation"
+        | "latitude"
+        | "longitude"
       >
     >,
   fetcher: FetchLike = fetch,
@@ -2332,6 +2779,76 @@ export async function enrichListingCandidate(
     : null;
   const requestTextSetting = inferSettingFactsFromText(
     parsedCandidate.listingRemarks
+  );
+  const coordinatePromise = (async () => {
+    if (
+      typeof parsedCandidate.latitude === "number" &&
+      typeof parsedCandidate.longitude === "number"
+    ) {
+      addDiagnostic(
+        "geocode",
+        "skipped",
+        "Property coordinates already exist.",
+        `${parsedCandidate.latitude}, ${parsedCandidate.longitude}`
+      );
+      return {
+        latitude: parsedCandidate.latitude,
+        longitude: parsedCandidate.longitude,
+        label: "Existing property coordinates"
+      };
+    }
+
+    try {
+      addDiagnostic(
+        "geocode",
+        "started",
+        "Looking up property coordinates.",
+        formatCandidateAddress(parsedCandidate)
+      );
+      const geocodeResult = await geocodeAddress(
+        formatCandidateAddress(parsedCandidate),
+        fetcher
+      );
+
+      if (geocodeResult.coordinate) {
+        addDiagnostic(
+          "geocode",
+          "success",
+          "Property coordinates found.",
+          geocodeResult.coordinate.label
+        );
+        return {
+          latitude: geocodeResult.coordinate.lat,
+          longitude: geocodeResult.coordinate.lng,
+          label: geocodeResult.coordinate.label
+        };
+      }
+
+      addDiagnostic(
+        "geocode",
+        "warning",
+        "Property coordinates were not found.",
+        geocodeResult.warning ?? "No geocode result was returned."
+      );
+      return null;
+    } catch (error) {
+      addDiagnostic(
+        "geocode",
+        "warning",
+        "Property coordinate lookup failed.",
+        error instanceof Error ? error.message : "Unknown geocoding error."
+      );
+      return null;
+    }
+  })();
+  const requestGisSettingPromise = coordinatePromise.then((coordinate) =>
+    inferSettingFactsFromCtGis(
+      parsedCandidate,
+      fetcher,
+      requestSignal,
+      addDiagnostic,
+      coordinate
+    )
   );
   const requestPhotoUrls = Array.from(
     new Set([
@@ -2467,9 +2984,15 @@ export async function enrichListingCandidate(
         photoRenovation?.renovation ?? null,
         requestTextRenovation
       );
+      const requestGisSetting = await requestGisSettingPromise;
+      const geocodedCoordinate = await coordinatePromise;
+      const settingFacts = mergeSettingFacts(
+        requestTextSetting,
+        requestGisSetting
+      );
       recordSettingInferenceDiagnostic(
         addDiagnostic,
-        requestTextSetting,
+        settingFacts,
         Boolean(parsedCandidate.listingRemarks.trim()),
         "Listing remarks"
       );
@@ -2506,10 +3029,12 @@ export async function enrichListingCandidate(
         fetchedAt,
         updates: {
           ...emptyUpdates(),
+          latitude: geocodedCoordinate?.latitude ?? null,
+          longitude: geocodedCoordinate?.longitude ?? null,
           ...getStyleUpdate(requestStyle.style),
           ...getSettingUpdate(
             addSettingCoverageFact(
-              requestTextSetting,
+              settingFacts,
               Boolean(parsedCandidate.listingRemarks.trim())
             )
           ),
@@ -2595,9 +3120,15 @@ export async function enrichListingCandidate(
         photoRenovation?.renovation ?? null,
         requestTextRenovation
       );
+      const requestGisSetting = await requestGisSettingPromise;
+      const geocodedCoordinate = await coordinatePromise;
+      const settingFacts = mergeSettingFacts(
+        requestTextSetting,
+        requestGisSetting
+      );
       recordSettingInferenceDiagnostic(
         addDiagnostic,
-        requestTextSetting,
+        settingFacts,
         Boolean(parsedCandidate.listingRemarks.trim()),
         "Listing remarks"
       );
@@ -2634,10 +3165,12 @@ export async function enrichListingCandidate(
         fetchedAt,
         updates: {
           ...emptyUpdates(),
+          latitude: geocodedCoordinate?.latitude ?? null,
+          longitude: geocodedCoordinate?.longitude ?? null,
           ...getStyleUpdate(requestStyle.style),
           ...getSettingUpdate(
             addSettingCoverageFact(
-              requestTextSetting,
+              settingFacts,
               Boolean(parsedCandidate.listingRemarks.trim())
             )
           ),
@@ -2695,9 +3228,11 @@ export async function enrichListingCandidate(
       textRenovation
     );
     const pageText = `${metadata.pageText} ${parsedCandidate.listingRemarks}`;
+    const requestGisSetting = await requestGisSettingPromise;
+    const geocodedCoordinate = await coordinatePromise;
     const settingFacts = mergeSettingFacts(
-      inferSettingFactsFromText(pageText),
-      requestTextSetting
+      mergeSettingFacts(inferSettingFactsFromText(pageText), requestTextSetting),
+      requestGisSetting
     );
     recordSettingInferenceDiagnostic(
       addDiagnostic,
@@ -2739,6 +3274,8 @@ export async function enrichListingCandidate(
 
     const updates = {
       askingPrice: shouldFillPrice ? metadata.askingPrice : null,
+      latitude: geocodedCoordinate?.latitude ?? null,
+      longitude: geocodedCoordinate?.longitude ?? null,
       primaryPhotoUrl: "",
       photoUrls: [],
       ...getStyleUpdate(style),
@@ -2896,9 +3433,15 @@ export async function enrichListingCandidate(
       photoRenovation?.renovation ?? null,
       requestTextRenovation
     );
+    const requestGisSetting = await requestGisSettingPromise;
+    const geocodedCoordinate = await coordinatePromise;
+    const settingFacts = mergeSettingFacts(
+      requestTextSetting,
+      requestGisSetting
+    );
     recordSettingInferenceDiagnostic(
       addDiagnostic,
-      requestTextSetting,
+      settingFacts,
       Boolean(parsedCandidate.listingRemarks.trim()),
       "Listing remarks"
     );
@@ -2935,10 +3478,12 @@ export async function enrichListingCandidate(
       fetchedAt,
       updates: {
         ...emptyUpdates(),
+        latitude: geocodedCoordinate?.latitude ?? null,
+        longitude: geocodedCoordinate?.longitude ?? null,
         ...getStyleUpdate(requestStyle.style),
         ...getSettingUpdate(
           addSettingCoverageFact(
-            requestTextSetting,
+            settingFacts,
             Boolean(parsedCandidate.listingRemarks.trim())
           )
         ),
