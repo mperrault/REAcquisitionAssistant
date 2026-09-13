@@ -88,6 +88,7 @@ export function createPropertyFact(
     value: patch.value ?? null,
     sourceType: patch.sourceType ?? "user_entered",
     sourceReference: patch.sourceReference ?? "",
+    evidencePhotoUrls: patch.evidencePhotoUrls ?? [],
     confidence: patch.confidence ?? null,
     verified: patch.verified ?? false,
     observedAt: patch.observedAt ?? timestamp

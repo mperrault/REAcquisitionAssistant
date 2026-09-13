@@ -426,7 +426,8 @@ describe("listing page enrichment", () => {
                     label: "Kitchen refresh",
                     amount: 18000,
                     confidence: 0.7,
-                    evidence: "Older cabinets and counters are visible."
+                    evidence: "Older cabinets and counters are visible.",
+                    supportingPhotoNumbers: [1]
                   }
                 ],
                 expectedCost: 18000,
@@ -469,7 +470,10 @@ describe("listing page enrichment", () => {
           label: "Kitchen refresh",
           amount: 18000,
           confidence: 0.7,
-          evidence: "Older cabinets and counters are visible."
+          evidence: "Older cabinets and counters are visible.",
+          evidencePhotoUrls: [
+            "https://ap.rdcpix.com/47highstreetstaffordct06076l-m1112937458s.jpg"
+          ]
         }
       ]);
       expect(result.updates.renovationExpectedCost).toBe(18000);

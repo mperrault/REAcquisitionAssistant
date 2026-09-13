@@ -1340,7 +1340,8 @@ function upsertInferredPropertyFact(
   value: PropertyFact["value"],
   confidence: number | null,
   sourceReference: string,
-  observedAt: string
+  observedAt: string,
+  evidencePhotoUrls: string[] = []
 ) {
   if (!factKey) {
     return facts;
@@ -1369,6 +1370,7 @@ function upsertInferredPropertyFact(
     value,
     sourceType: "ai_inferred" as const,
     sourceReference,
+    evidencePhotoUrls,
     confidence,
     verified: false,
     observedAt
@@ -1503,7 +1505,8 @@ function mergeEnrichmentIntoProperty(
       lineItem.evidence
         ? `${photoInferenceReference}: ${lineItem.evidence}`
         : photoInferenceReference,
-      enrichment.fetchedAt
+      enrichment.fetchedAt,
+      lineItem.evidencePhotoUrls
     );
 
     if (renovationFacts !== beforeFacts) {
@@ -5573,6 +5576,8 @@ function FinancialsTab({
   draft: PropertyRecord;
   updateDraft: (patch: Partial<PropertyRecord>) => void;
 }) {
+  const [expandedRenovationPhotoUrl, setExpandedRenovationPhotoUrl] =
+    React.useState<string | null>(null);
   const lowEstimate = getNumericFactValue(draft, "renovation.estimate_low");
   const expectedEstimate = getRenovationExpectedCost(draft);
   const highEstimate = getNumericFactValue(draft, "renovation.estimate_high");
@@ -5661,6 +5666,42 @@ function FinancialsTab({
 
   return (
     <div className="grid gap-5">
+      {expandedRenovationPhotoUrl ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/85 p-4 backdrop-blur-sm">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Renovation evidence photo"
+            className="grid max-h-[90vh] w-full max-w-5xl gap-3 rounded-lg border border-border bg-card p-3 shadow-xl"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold">
+                Renovation Evidence Photo
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setExpandedRenovationPhotoUrl(null)}
+              >
+                Close
+              </Button>
+            </div>
+            <div className="relative h-[72vh] overflow-hidden rounded-md border border-border bg-secondary">
+              <Image
+                src={expandedRenovationPhotoUrl}
+                alt="Expanded renovation evidence"
+                fill
+                sizes="90vw"
+                className="object-contain"
+                unoptimized
+                referrerPolicy="no-referrer"
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <Section title="Purchase And Carrying Costs">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <NumberField
@@ -5851,6 +5892,10 @@ function FinancialsTab({
                       <Trash2 aria-hidden="true" />
                     </Button>
                   </div>
+                  <RenovationLineItemEvidence
+                    fact={item.fact}
+                    onExpandPhoto={setExpandedRenovationPhotoUrl}
+                  />
                 </div>
               ))}
             </div>
@@ -5870,6 +5915,69 @@ function FinancialsTab({
           <InvestmentMetric label="Projected Total" value={projectedTotal} />
         </div>
       </Section>
+    </div>
+  );
+}
+
+function RenovationLineItemEvidence({
+  fact,
+  onExpandPhoto
+}: {
+  fact: PropertyFact;
+  onExpandPhoto: (photoUrl: string) => void;
+}) {
+  const evidencePhotoUrls = fact.evidencePhotoUrls ?? [];
+  const evidenceText =
+    fact.sourceType === "ai_inferred" && fact.sourceReference
+      ? fact.sourceReference
+      : "";
+
+  if (!evidenceText && evidencePhotoUrls.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="grid gap-2 border-t border-border pt-3 md:col-span-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="secondary">AI evidence</Badge>
+        {evidencePhotoUrls.length > 0 ? (
+          <span className="text-xs text-muted-foreground">
+            {evidencePhotoUrls.length} supporting photo
+            {evidencePhotoUrls.length === 1 ? "" : "s"}
+          </span>
+        ) : null}
+      </div>
+      {evidenceText ? (
+        <p className="text-sm text-muted-foreground">{evidenceText}</p>
+      ) : null}
+      {evidencePhotoUrls.length > 0 ? (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {evidencePhotoUrls.map((photoUrl, index) => (
+            <button
+              key={`${photoUrl}-${index}`}
+              type="button"
+              onClick={() => onExpandPhoto(photoUrl)}
+              className="relative h-20 w-28 shrink-0 overflow-hidden rounded-md border border-border bg-secondary focus:outline-none focus:ring-2 focus:ring-primary"
+              title="Expand evidence photo"
+            >
+              <Image
+                src={photoUrl}
+                alt={`Renovation evidence photo ${index + 1}`}
+                fill
+                sizes="112px"
+                className="object-cover"
+                loading="lazy"
+                unoptimized
+                referrerPolicy="no-referrer"
+              />
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-muted-foreground">
+          No specific supporting photo was returned for this line item.
+        </div>
+      )}
     </div>
   );
 }

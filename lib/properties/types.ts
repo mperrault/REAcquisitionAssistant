@@ -47,6 +47,7 @@ export const propertyFactSchema = z.object({
   value: z.union([z.boolean(), z.number(), z.string(), z.null()]),
   sourceType: propertyFactSourceTypeSchema,
   sourceReference: z.string(),
+  evidencePhotoUrls: z.array(z.string()).default([]),
   confidence: z.number().min(0).max(1).nullable(),
   verified: z.boolean(),
   observedAt: z.string().datetime()

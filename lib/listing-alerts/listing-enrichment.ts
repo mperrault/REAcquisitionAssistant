@@ -35,7 +35,8 @@ const renovationLineItemSchema = z.object({
   label: z.string().min(1),
   amount: z.number().int().nonnegative(),
   confidence: z.number().min(0).max(1).nullable(),
-  evidence: z.string()
+  evidence: z.string(),
+  evidencePhotoUrls: z.array(z.string()).default([])
 });
 
 const inferredFactSchema = z.object({
@@ -980,7 +981,46 @@ function isRoutineMaintenanceOnlyLineItem(
   );
 }
 
-function parseVisionRenovationInference(text: string): RenovationInference | null {
+function parseSupportingPhotoNumbers(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) =>
+      typeof item === "number"
+        ? item
+        : typeof item === "string"
+          ? Number.parseInt(item, 10)
+          : Number.NaN
+    )
+    .filter((item) => Number.isInteger(item) && item > 0);
+}
+
+function getSupportingPhotoUrls(
+  record: Record<string, unknown>,
+  imageUrlsForRequest: string[]
+) {
+  const photoNumbers = [
+    ...parseSupportingPhotoNumbers(record.supportingPhotoNumbers),
+    ...parseSupportingPhotoNumbers(record.supportingPhotoIndexes),
+    ...parseSupportingPhotoNumbers(record.photoNumbers),
+    ...parseSupportingPhotoNumbers(record.photoIndexes)
+  ];
+
+  return Array.from(
+    new Set(
+      photoNumbers
+        .map((photoNumber) => imageUrlsForRequest[photoNumber - 1])
+        .filter(Boolean)
+    )
+  );
+}
+
+function parseVisionRenovationInference(
+  text: string,
+  imageUrlsForRequest: string[] = []
+): RenovationInference | null {
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
 
@@ -1052,7 +1092,8 @@ function parseVisionRenovationInference(text: string): RenovationInference | nul
           evidence:
             typeof record.evidence === "string"
               ? normalizeText(record.evidence).slice(0, 240)
-              : "Visible in listing photos"
+              : "Visible in listing photos",
+          evidencePhotoUrls: getSupportingPhotoUrls(record, imageUrlsForRequest)
         }
       ];
     });
@@ -1117,7 +1158,8 @@ function createRenovationLineItem(
     label,
     amount,
     confidence,
-    evidence: normalizeText(evidence).slice(0, 240)
+    evidence: normalizeText(evidence).slice(0, 240),
+    evidencePhotoUrls: []
   };
 }
 
@@ -1547,9 +1589,23 @@ function mergeRenovationPhotoBatchResults(
       const existing = lineItems.get(item.factKey);
       const existingConfidence = existing?.confidence ?? 0;
       const nextConfidence = item.confidence ?? 0;
+      const evidencePhotoUrls = Array.from(
+        new Set([
+          ...(existing?.evidencePhotoUrls ?? []),
+          ...item.evidencePhotoUrls
+        ])
+      );
 
       if (!existing || nextConfidence > existingConfidence) {
-        lineItems.set(item.factKey, item);
+        lineItems.set(item.factKey, {
+          ...item,
+          evidencePhotoUrls
+        });
+      } else if (evidencePhotoUrls.length > existing.evidencePhotoUrls.length) {
+        lineItems.set(item.factKey, {
+          ...existing,
+          evidencePhotoUrls
+        });
       }
     }
   }
@@ -1650,10 +1706,11 @@ async function inferRenovationsFromPhotos(
                   "Do not infer hidden defects, code issues, electrical, plumbing, structural, roof, or foundation work unless directly visible. " +
                   `Use only these scope fact keys: ${allowedScopes}. ` +
                   "Return conservative ballpark USD costs for the visible work that actually qualifies. " +
+                  "For each line item, include supportingPhotoNumbers as a 1-based array of the specific input photos that show the visible condition. " +
                   "If nothing needs near-term work, return empty scopeFacts and lineItems with null cost estimates. " +
                   "Return only JSON with keys scopeFacts, lineItems, expectedCost, lowEstimate, highEstimate. " +
                   "scopeFacts must contain objects with factKey, confidence, evidence. " +
-                  "lineItems must contain objects with label, amount, confidence, evidence."
+                  "lineItems must contain objects with label, amount, confidence, evidence, supportingPhotoNumbers."
               },
               ...imageUrlsForRequest.map((imageUrl) => ({
                 type: "input_image",
@@ -1675,7 +1732,8 @@ async function inferRenovationsFromPhotos(
 
     return {
       renovation: parseVisionRenovationInference(
-        extractResponseOutputText(await response.json())
+        extractResponseOutputText(await response.json()),
+        imageUrlsForRequest
       ),
       warning: null
     };
